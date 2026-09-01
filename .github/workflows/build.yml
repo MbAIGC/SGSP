@@ -1,0 +1,82 @@
+name: Build & Test
+
+# 触发:
+#   - 推送到 main 分支: 跑测试 + 重新生成插件包 + 上传构建产物
+#   - 推送 v* 标签(如 v0.3.0-dev-00): 额外创建 GitHub Release 并上传 package.zip
+#   - 手动触发(workflow_dispatch): 可自定义版本号
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "插件版本号(留空: tag 触发用 tag 名,v0.3.0-dev-00 省略 v 前缀;否则默认 0.3.0-dev-00)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Determine plugin version
+        id: ver
+        run: |
+          V="${{ github.event.inputs.version }}"
+          if [ -z "$V" ]; then
+            if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+              V="${GITHUB_REF#refs/tags/}"
+              V="${V#v}"
+            else
+              V="0.3.0-dev-00"
+            fi
+          fi
+          echo "version=$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Unit tests
+        run: node --test tests/*.test.mjs
+
+      - name: Build plugin package files (patch injection)
+        # 从 vendor/index.js(官方原版)+ src/sync-flow-runtime.js 重新生成
+        # 根目录 index.js,并就地补齐 i18n / index.css / plugin.json
+        run: GIT_SYNC_VERSION=${{ steps.ver.outputs.version }} node patch/apply-patch.mjs
+
+      - name: Syntax check
+        run: node --check index.js
+
+      - name: End-to-end smoke verification
+        run: node smoke/verify.mjs
+
+      - name: Package plugin zip
+        run: |
+          mkdir -p dist
+          zip -r -q dist/GIT-SYNC-PLUGIN-${{ steps.ver.outputs.version }}.zip \
+            index.js index.css plugin.json i18n icon.png preview.png \
+            README.md README_zh_CN.md
+          ls -la dist/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GIT-SYNC-PLUGIN-${{ steps.ver.outputs.version }}
+          path: dist/*.zip
+
+      - name: Publish GitHub Release (only on tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

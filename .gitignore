@@ -1,0 +1,9 @@
+# 依赖与临时产物
+node_modules/
+.npm-cache/
+.npm-logs/
+
+# 调试/临时文件
+debug-*.js
+debug-*.mjs
+*.log

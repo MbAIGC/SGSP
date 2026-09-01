@@ -1,0 +1,6 @@
+@charset "UTF-8";.tooltipGitGraph.svelte-1naq546{width:auto;height:auto;position:absolute;background-color:#312f35;border-radius:5px;display:none;color:#fff;padding:2px;font-size:.8em}
+
+
+/* ===== GIT-SYNC 冲突暂停状态徽标(patch/apply-patch.mjs 注入) ===== */
+.toolbar__item.git-sync-conflict-paused svg{color:#e53935!important;animation:gitSyncConflictBlink 1.1s ease-in-out infinite}
+@keyframes gitSyncConflictBlink{0%,100%{opacity:1}50%{opacity:.25}}
