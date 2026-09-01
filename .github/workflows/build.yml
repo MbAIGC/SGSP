@@ -1,22 +1,25 @@
 name: Build & Test
 
 # 触发:
-#   - 推送到 main 分支: 跑测试 + 重新生成插件包 + 上传构建产物
-#   - 推送 v* 标签(如 v0.3.1): 额外创建 GitHub Release 并上传 SGSP zip 包
+#   - 推送到 main 分支: 跑测试 + 重新生成插件包 + 创建 GitHub Release
 #   - 手动触发(workflow_dispatch): 可自定义版本号
+# 版本号: 默认从 0.3.01 开始,每次成功编译自动递增两位补丁号
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "插件版本号(留空: tag 触发用 tag 名,v0.3.1 省略 v 前缀;否则默认 0.3.0-dev-00)"
+        description: "插件版本号(留空: main 自动递增;默认从 0.3.01 开始)"
         required: false
         default: ""
 
 permissions:
   contents: write
+
+concurrency:
+  group: sgsp-main-release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,14 +36,18 @@ jobs:
 
       - name: Determine plugin version
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           V="${{ github.event.inputs.version }}"
           if [ -z "$V" ]; then
-            if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
-              V="${GITHUB_REF#refs/tags/}"
-              V="${V#v}"
+            LATEST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '[.[] | select(.tagName | test("^v0\\.3\\.[0-9]{2}$")) | .tagName] | sort | last' || true)
+            if [ -z "$LATEST" ]; then
+              V="0.3.01"
             else
-              V="0.3.1"
+              PATCH="${LATEST#v0.3.}"
+              PATCH=$((10#$PATCH + 1))
+              V=$(printf '0.3.%02d' "$PATCH")
             fi
           fi
           echo "version=$V"
@@ -74,9 +81,11 @@ jobs:
           name: SGSP-${{ steps.ver.outputs.version }}
           path: dist/*.zip
 
-      - name: Publish GitHub Release (only on tag push)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: SGSP v${{ steps.ver.outputs.version }}
           files: dist/*.zip
           generate_release_notes: true

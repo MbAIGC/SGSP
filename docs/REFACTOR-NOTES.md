@@ -86,7 +86,7 @@ Release 附件的 `package.zip` 中（当前仓库的 `vendor/` 目录保留官�
 node --test tests/sync-flow.test.mjs
 
 # 2) 构建插件包文件（幂等；从 vendor/index.js 官方原版重新生成根目录 index.js,
-#    并就地补齐 i18n / index.css / plugin.json;默认版本 0.3.1,
+#    并就地补齐 i18n / index.css / plugin.json;默认版本 0.3.01,
 #    可用 GIT_SYNC_VERSION 覆盖,CI 自动执行)
 node patch/apply-patch.mjs
 

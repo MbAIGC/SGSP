@@ -141,7 +141,7 @@ SGSP 是由 `MbAIGC` 维护的思源笔记 Git 同步插件，用于在本地文
 └── README.md / README_en_US.md / CHANGELOG.md
 ```
 
-> 重新构建插件包: `node patch/apply-patch.mjs`(幂等,默认版本 `0.3.1`,
+> 重新构建插件包: `node patch/apply-patch.mjs`(幂等,默认版本 `0.3.01`,
 > 可用环境变量 `GIT_SYNC_VERSION` 覆盖,CI 自动执行)。
 
 ## 注意事项

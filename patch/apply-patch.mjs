@@ -12,7 +12,7 @@
  *
  * 作用: 把 src/sync-flow-runtime.js 注入 vendor/index.js 中,生成根目录 index.js;
  *       并幂等地补齐 index.css(冲突徽标样式)、i18n(界面文案)、
- *       plugin.json(版本号,默认 0.3.0-dev-00,可用环境变量 GIT_SYNC_VERSION 覆盖)。
+ *       plugin.json(版本号,默认 0.3.01,可用环境变量 GIT_SYNC_VERSION 覆盖)。
  *
  * 注入点(全部为对原 bundle 的「前置/包装」修改,不改动任何同步算法):
  *   1. runtime 注入    —— 在 const q=require("siyuan"); 之后注入状态机宿主
@@ -24,7 +24,7 @@
  *                         「用户手动触发」
  *   6. i18n / index.css / plugin.json —— 补充界面文案、冲突徽标样式、版本号
  *
- * 用法: node patch/apply-patch.mjs            # 默认版本 0.3.0-dev-00
+ * 用法: node patch/apply-patch.mjs            # 默认版本 0.3.01
  *       GIT_SYNC_VERSION=0.3.0-dev-01 node patch/apply-patch.mjs
  *
  * 说明:
@@ -75,7 +75,7 @@ const CSS_FILE = path.join(ROOT, "index.css"); // 插件包样式(就地追加)
 const PLUGIN_JSON = path.join(ROOT, "plugin.json"); // 插件包元数据(就地写版本)
 
 /** 默认版本号;可用环境变量 GIT_SYNC_VERSION 覆盖(CI 注入) */
-const DEFAULT_VERSION = "0.3.1";
+const DEFAULT_VERSION = "0.3.01";
 const VERSION = process.env.GIT_SYNC_VERSION || DEFAULT_VERSION;
 
 const MARKER = "__gSyncFlow"; // 已注入标记
@@ -334,7 +334,7 @@ function patchCss() {
   return true;
 }
 
-/** 就地写入版本号(默认 0.3.0-dev-00,可用 GIT_SYNC_VERSION 覆盖) */
+/** 就地写入版本号(默认 0.3.01,可用 GIT_SYNC_VERSION 覆盖) */
 function patchVersion() {
   const raw = read(PLUGIN_JSON, true);
   const data = JSON.parse(raw);

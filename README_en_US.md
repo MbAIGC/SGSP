@@ -147,7 +147,7 @@ Design details: [docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md).
 ```
 
 > Rebuild the plugin package: `node patch/apply-patch.mjs` (idempotent; default version
-> `0.3.1`, override with the `GIT_SYNC_VERSION` env var; CI runs it automatically).
+> `0.3.01`, override with the `GIT_SYNC_VERSION` env var; CI runs it automatically).
 
 ## Precautions
 

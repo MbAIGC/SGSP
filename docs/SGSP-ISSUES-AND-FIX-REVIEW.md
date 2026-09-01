@@ -193,7 +193,7 @@ index.js                    最终插件 JavaScript 产物
 执行构建：
 
 ```bash
-GIT_SYNC_VERSION=0.3.1 node patch/apply-patch.mjs
+GIT_SYNC_VERSION=0.3.01 node patch/apply-patch.mjs
 ```
 
 构建脚本具备以下保护：
