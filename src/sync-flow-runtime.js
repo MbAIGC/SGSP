@@ -135,6 +135,38 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+function getErrorSummary(err) {
+  let node = err;
+  let first = null;
+  for (let i = 0; node && i < 7; i++) {
+    if (!first) first = node;
+    if (node.status || (node.response && node.response.status)) {
+      const response = node.response || {};
+      const data = response.data || {};
+      return {
+        message: String(data.message || node.message || first.message || node),
+        status: response.status || node.status || 0,
+        path: node.path || first.path || "",
+      };
+    }
+    node = node.cause;
+  }
+  return {
+    message: String((first && first.message) || err || "未知错误"),
+    status: 0,
+    path: (first && first.path) || "",
+  };
+}
+
+function formatErrorSummary(err) {
+  const summary = getErrorSummary(err);
+  let message = summary.message.replace(/Bearer\\s+[^\\s]+/gi, "Bearer [已隐藏]");
+  message = message.replace(/(token|password|authorization|cookie)\\s*[:=]\\s*[^,;\\s]+/gi, "$1=[已隐藏]");
+  if (summary.status) message = "HTTP " + summary.status + ": " + message;
+  if (summary.path) message += " (文件: " + summary.path + ")";
+  return message.slice(0, 500);
+}
+
 /**
  * 创建冲突处理宿主(每个插件实例一个)。
  * @param {object} plugin 插件实例(q.Plugin 子类)
@@ -606,7 +638,7 @@ export function createSyncFlowHost(plugin, q) {
       } else if (!benign) {
         host.state = SyncState.FAILED;
         setBadge();
-        const message = err && err.message ? err.message : String(err);
+        const message = formatErrorSummary(err);
         addLog("error", "同步失败: " + message);
         notify("❌ 同步失败: " + message, "error");
       } else {

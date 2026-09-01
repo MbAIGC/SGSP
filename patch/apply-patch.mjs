@@ -258,7 +258,38 @@ function patchIndex(js) {
     "async openSyncHistoryPanel(){try{" + historyInner + "}catch(err){const host=__gSyncFlow||__gEnsureSyncFlow(this);host.addLog(\"error\",\"同步历史面板打开失败: \"+(err&&err.message?err.message:err));host.notify(host.i18n(\"gSyncHistoryError\",\"❌ 同步历史面板暂时无法打开,请稍后重试\"),\"error\");}}";
   js = js.slice(0, hi) + historyMethod + js.slice(he);
 
-  /* ---------- 7. gitUtil 错误向状态机传播 ---------- */
+  /* ---------- 7. Git Blob 上传诊断与请求大小预检 ---------- */
+  const blobStart = "async addFileToWorkArea(";
+  const blobEnd = "async commitAndPushFileToRemote(";
+  const blobCandidates = [];
+  let blobCursor = 0;
+  while ((blobCursor = js.indexOf(blobStart, blobCursor)) >= 0) {
+    blobCandidates.push(blobCursor);
+    blobCursor += blobStart.length;
+  }
+  if (blobCandidates.length !== 2) fail("addFileToWorkArea 方法数量异常: " + blobCandidates.length);
+  const bi = blobCandidates.find((pos) => {
+    const end = js.indexOf(blobEnd, pos);
+    return end > pos && js.slice(pos, end).includes("rest.git.createBlob");
+  });
+  if (bi === undefined) fail("未找到包含 Git Blob 上传调用的 addFileToWorkArea 方法");
+  const be = js.indexOf(blobEnd, bi);
+  if (be < 0) fail("commitAndPushFileToRemote 方法边界不存在");
+  const blobBody = js.slice(bi, be);
+  if (!blobBody.endsWith("}")) fail("addFileToWorkArea 方法体解析异常(未以 } 结尾)");
+  const blobInner = blobBody.slice(blobStart.length, blobBody.length - 1);
+  const blobNeedle = "let n;try{if(n=await this.octokit.rest.git.createBlob({owner:this.owner,repo:this.repo,content:Yr.Buffer.from(s.content).toString(s.encoding),encoding:s.encoding}),S.info(\"createBlob:\",n),n.status==201||n.status==200)";
+  assertAnchor(blobInner, blobNeedle, "Git Blob 上传调用");
+  const blobReplacement =
+    'let n;const __rawSize=Number(s.size)||0,__encodedSize=Math.ceil(__rawSize/3)*4,__requestSize=__encodedSize+2048,__limit=Number(this.settingUtils.get("sgsp_blob_request_limit"))||33554432;if(__requestSize>__limit)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${Math.round(__requestSize/1048576)}MB`);try{if(n=await this.octokit.rest.git.createBlob({owner:this.owner,repo:this.repo,content:Yr.Buffer.from(s.content).toString(s.encoding),encoding:s.encoding}),S.info("createBlob:",n),n.status==201||n.status==200)';
+  const blobPatchedBody = blobBody.replace(blobNeedle, blobReplacement).replace(
+    "}catch{throw new Fe(ne.GIT_BLOB,s.path,this.i18n.createFileTreeFailed,s,n)}}}",
+    "}catch(err){const __wrapped=new Fe(ne.GIT_BLOB,s.path,this.i18n.createFileTreeFailed,s,n);__wrapped.cause=err;throw __wrapped}}}"
+  );
+  assertAnchor(blobPatchedBody, "catch(err){const __wrapped=new Fe(ne.GIT_BLOB", "Git Blob 底层错误保留");
+  js = js.slice(0, bi) + blobPatchedBody + js.slice(be);
+
+  /* ---------- 8. gitUtil 错误向状态机传播 ---------- */
   const anchorsGitUtil = [
     'He([we({rethrow:!1})],xe.prototype,"handleRemoteCoverLocal")',
     'He([we({rethrow:!1})],xe.prototype,"handleLocalCoverRemote")',

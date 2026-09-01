@@ -302,6 +302,26 @@ test("非冲突错误: 状态 FAILED 并重新抛出", async () => {
   assert.ok(host.logEntries.some((entry) => entry.level === "error" && /网络错误/.test(entry.message)));
 });
 
+test("底层 Git API 错误: 前端显示 HTTP 状态和脱敏摘要", async () => {
+  const p = makeFakePlugin({
+    baseSync: async function () {
+      throw {
+        message: "创建文件提交树失败",
+        cause: {
+          status: 413,
+          response: { status: 413, data: { message: "request entity too large" } },
+          message: "上传失败",
+          path: "conf/appearance/fonts/font.ttf",
+        },
+      };
+    },
+  });
+  const host = p.__gSyncFlowHost;
+  await assert.rejects(() => host.runSync(undefined, false));
+  assert.ok(host.logEntries.some((entry) => /HTTP 413/.test(entry.message)));
+  assert.ok(p._q._msgs.some((m) => /HTTP 413/.test(m.msg)));
+});
+
 test("持久化恢复: 重启后保持冲突暂停状态", async () => {
   const p = makeFakePlugin({ conflictOnSync: true });
   const host = p.__gSyncFlowHost;
