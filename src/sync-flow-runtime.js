@@ -157,6 +157,7 @@ export function createSyncFlowHost(plugin, q) {
     // 当前冲突弹窗
     dialog: null,
     restorePromise: null,
+    logEntries: [],
   };
 
   function i18n(key, fallback) {
@@ -168,11 +169,44 @@ export function createSyncFlowHost(plugin, q) {
     }
   }
 
+  function addLog(level, message) {
+    const entry = {
+      time: new Date().toISOString(),
+      level: level || "info",
+      message: String(message == null ? "" : message),
+    };
+    host.logEntries.push(entry);
+    if (host.logEntries.length > 200) host.logEntries.shift();
+    return entry;
+  }
+
   function notify(msg, type) {
+    addLog(type === "error" ? "error" : "info", msg);
     try {
       q.showMessage(msg, 3000, type || "info");
     } catch (e) {
       /* 通知失败不影响主流程 */
+    }
+  }
+
+  function showRuntimeLogs() {
+    const rows = host.logEntries.length
+      ? host.logEntries
+          .map(function (entry) {
+            return "<div><strong>[" + escapeHtml(entry.level.toUpperCase()) + "] " + escapeHtml(entry.time) + "</strong> " + escapeHtml(entry.message) + "</div>";
+          })
+          .join("")
+      : "<div>暂无运行日志</div>";
+    try {
+      new q.Dialog({
+        title: i18n("gSyncRuntimeLogsTitle", "SGSP 运行日志"),
+        content: '<div class="fn__flex-column" style="height:100%;overflow:auto;padding:8px;font-family:monospace;white-space:pre-wrap;">' + rows + "</div>",
+        width: "80vw",
+        height: "70vh",
+      });
+    } catch (err) {
+      addLog("error", "打开运行日志失败: " + (err && err.message ? err.message : err));
+      try { q.showMessage("❌ 无法打开 SGSP 运行日志", 3000, "error"); } catch (e) {}
     }
   }
 
@@ -572,6 +606,9 @@ export function createSyncFlowHost(plugin, q) {
       } else if (!benign) {
         host.state = SyncState.FAILED;
         setBadge();
+        const message = err && err.message ? err.message : String(err);
+        addLog("error", "同步失败: " + message);
+        notify("❌ 同步失败: " + message, "error");
       } else {
         // 「正在同步中」的良性保护错误: 恢复进入前的状态
         host.state = prevState;
@@ -583,6 +620,8 @@ export function createSyncFlowHost(plugin, q) {
   // 挂载公开方法到宿主
   host.i18n = i18n;
   host.notify = notify;
+  host.addLog = addLog;
+  host.showRuntimeLogs = showRuntimeLogs;
   host.setBadge = setBadge;
   host.persist = persist;
   host.onAfterLoad = onAfterLoad;

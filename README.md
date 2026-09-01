@@ -1,175 +1,170 @@
 # SGSP
 
-[中文](./README_zh_CN.md)
+[English](./README_en_US.md)
 
-SGSP is a SiYuan Git synchronization plugin maintained by `MbAIGC` for synchronizing local files with GitHub and Gitee repositories.
+SGSP 是由 `MbAIGC` 维护的思源笔记 Git 同步插件，用于在本地文件与 GitHub / Gitee 代码仓库之间同步数据。
 
-> This project is forked from the v0.3.0 release package of [xstarling/sy-git-sync-plugin](https://github.com/xstarling/sy-git-sync-plugin).
-> It is named **SGSP** to avoid sharing the original plugin's name. Many thanks and respect to the original author, [xstarling](https://github.com/xstarling), for the design and implementation.
-> This version fixes sync-status notification issues and adds a complete conflict-handling loop
-> (see "Sync status & conflict handling" below).
-> Refactor details: [docs/REFACTOR-NOTES.md](./docs/REFACTOR-NOTES.md).
+> 本项目 Fork 自 [xstarling/sy-git-sync-plugin](https://github.com/xstarling/sy-git-sync-plugin) 的 v0.3.0 发布包。
+> 为避免与原插件重名，Fork 后改名为 **SGSP**；感谢并致敬原作者 [xstarling](https://github.com/xstarling) 的设计与实现。
+> 当前版本在原插件基础上修复同步状态通知问题，并新增完整的冲突处理闭环（见下方「同步状态与冲突处理」章节）。
+> 重构说明见 [docs/REFACTOR-NOTES.md](./docs/REFACTOR-NOTES.md)。
 
-## Changelog
+## 更新日志
 
-- Full changelog: [CHANGELOG.md](./CHANGELOG.md) (self-contained in the repo, no external links required).
-- Key changes in 0.3.0-dev-00:
-  1. On conflict, auto sync is paused, a persistent dialog lets you choose how to proceed, and auto sync resumes automatically after the conflict is resolved;
-  2. The top-bar icon shows a red badge while a conflict is pending;
-  3. Both READMEs were rewritten (terminology/typo fixes, clearer feature descriptions).
+- 完整更新日志见 [CHANGELOG.md](./CHANGELOG.md)(仓库内自包含,不再依赖外链)。
+- 本次 0.3.1 核心变化:
+  1. 冲突时自动暂停自动同步、持久化弹窗让用户选择处理方式、解决后自动恢复;
+  2. 顶栏新增冲突状态红色徽标;
+  3. 重写中英文 README,修正术语与错别字、补充功能说明。
 
-## Feature list
+## 功能列表
 
-+ **🚧 Large-file synchronization (under development)**
-  - 🚀 Combines the git repository with Baidu Cloud Drive / Aliyun Drive for large-file uploads
-+ **🚀 Function menu**
-  - 🚀 Start synchronization: run synchronization between local and remote
-  - 🚀 Refresh / update data
-    - 👉 Refresh work tree: fixes missing note IDs (【ID not found!】) after synchronization
-    - 👉 Update resource path: restores local resources when they fail to display because of a custom `assets/` resource path
-  - 🚀 Sync scope
-    - 👉 Workspace: all important workspace data is synchronized to the git repository
-    - 👉 Data directory (`data`): files under the `data` directory are synchronized
-    - 👉 Note files: SiYuan note files under `data` and `assets` image resources
-  - 🚀 Sync strategy
-    - 👉 Auto sync: the system compares and merges local and remote data automatically
-    - 👉 Choose direction: a dialog lets you pick [Cloud overwrites local] or [Local overwrites cloud], optionally forced
-    - 👉 Cloud overwrites local: in non-forced mode, conflicts generate a conflict document (if "Generate conflict document on conflict" is enabled), otherwise a prompt is shown
-    - 👉 Local overwrites cloud: in non-forced mode, conflicts generate a conflict document (if enabled), otherwise a prompt is shown
-  - 🚀 Note format
-    - 👉 SiYuan notes: files synchronized to the remote repository use the SiYuan note format (note files only)
-    - 👉 Markdown: files synchronized to the remote repository use Markdown format (note files only)
-  - 🚀 Sync mode
-    - 👉 Auto sync: synchronize periodically at the interval configured in settings
-    - 👉 Manual sync: synchronize once at startup only; not triggered at shutdown
-    - 👉 Fully manual sync: no sync at startup or shutdown; click [Start synchronization] to sync
-  - 🚀 Sync history
-    - 👉 Local commits: all remote commits up to the local device's last commit
-    - 👉 Remote commits: all remote commits up to now
-    - 👉 File search: filter commits by notebook, file ID/path, and time range
-    - 👉 Commit node: hover a commit in the sidebar history to see its summary
-    - 👉 Commit files: click a commit node to list the files in that commit
-    - 👉 File diff: opens a diff panel comparing the commit file with the local file
-    - 👉 Rollback file: the 【⤴︎】 button downloads the committed file and overwrites the local copy
-    - 👉 Download file: the 【↓】 button downloads the committed file and reports where it was saved
-+ **🚀 Settings**
-  - 🚀 User info: [repository platform] [repository URL] [repository name] [branch name] [platform username] [email]; the plugin works only after these are filled correctly
-  - 🚀 Ignore files: paths or file names to skip during synchronization
-  - 🚀 Resource file path (must end with【assets/】): replaces the `assets/` prefix in synchronized resource links with a custom prefix
-  - 🚀 Token / SSH: personal token for accessing GitHub / Gitee repositories
-  - 🚀 Generate conflict document on sync conflict: when enabled, a conflict document is created locally on conflict; when disabled, only a prompt is shown
-  - 🚀 Sync scope: see 【Function menu】→【Sync scope】
-  - 🚀 Sync mode: see 【Function menu】→【Sync mode】
-  - 🚀 Sync interval: interval of auto sync
-  - 🚀 Last commit SHA: the hash of the last local commit (read-only)
-  - 🚀 Last commit time: when the local device last committed (read-only)
++ **🚧 大文件同步(开发中)**
+  - 🚀 将 git 仓库与百度网盘、阿里网盘等结合,实现大文件上传同步
++ **🚀 功能菜单**
+  - 🚀 开始同步:启动本地与远端的数据同步
+  - 🚀 刷新/更新数据
+    - 👉 刷新工作树:若同步后本地新增文件出现【ID未找到!】的问题,可通过此按钮解决
+    - 👉 更新资源路径:若因配置 `assets/` 资源文件路径导致本地资源不能正常显示,可通过此按钮恢复
+  - 🚀 同步范围
+    - 👉 工作空间:工作空间中重要的数据均会同步到 git 仓库
+    - 👉 数据目录(`data` 目录):工作空间中 `data` 目录下的数据文件会被同步到 git 仓库
+    - 👉 笔记文件:工作空间中 `data` 目录下的思源笔记文件和 `assets` 图片资源文件
+  - 🚀 同步策略
+    - 👉 自动同步:由系统自动对比并合并本地与远端的数据
+    - 👉 选择同步方向:弹框让用户手动选择【云端覆盖本地】或【本地覆盖云端】,并可勾选是否强制覆盖
+    - 👉 云端覆盖本地:非强制模式下,若产生文档冲突会生成冲突文档(若勾选了「同步冲突时生成冲突文档」选项),否则弹框提示
+    - 👉 本地覆盖云端:非强制模式下,若产生文档冲突会生成冲突文档(若勾选了「同步冲突时生成冲突文档」选项),否则弹框提示
+  - 🚀 笔记格式
+    - 👉 思源笔记:同步到远端仓库的文件为思源格式的笔记(仅笔记文件,其他文件不支持)
+    - 👉 Markdown:同步到远端仓库的文件为 Markdown 格式的笔记(仅笔记文件,其他文件不支持)
+  - 🚀 同步模式
+    - 👉 自动同步:按设置界面中设定的时间间隔定时同步到 git 仓库
+    - 👉 手动同步:仅在系统启动时同步一次,系统关闭时不触发同步
+    - 👉 完全手动同步:系统启动和关闭时均不触发同步,需要手动点击【开始同步】才会同步
+  - 🚀 同步历史
+    - 👉 本地提交:查询截止到本机设备上次提交之前的远端 git 仓库的所有提交记录
+    - 👉 远端提交:查询截止到当前时刻远端 git 仓库的所有提交记录
+    - 👉 搜索文件:按笔记本、文件 ID 或路径、时间范围筛选包含对应文件的提交记录
+    - 👉 提交节点:鼠标悬停侧边栏同步历史中的提交节点,可查看提交摘要
+    - 👉 提交文件:点击提交节点后,同步历史面板右侧展示该提交的文件列表
+    - 👉 文件对比:点击提交文件后打开对比面板,并排展示提交节点文件内容与本地同名文件内容
+    - 👉 回滚文件:提交文件列表中的【⤴︎】按钮,可将提交记录中的文件下载到本地并覆盖本地内容
+    - 👉 下载文件:提交文件列表中的【↓】按钮,可将提交记录中的文件下载到本地,并提示下载路径
++ **🚀 设置界面**
+  - 🚀 用户信息:包括【git 仓库平台】【git 仓库地址】【git 仓库名称】【git 仓库分支名】【git 平台用户名】【邮箱】,填写正确完整后插件才可使用
+  - 🚀 忽略文件:填写不需要同步的文件路径或文件名,同步时自动忽略
+  - 🚀 资源文件路径(必须以【assets/】结尾):将同步到平台的文件中资源链接的 `assets/` 替换为自定义路径前缀
+  - 🚀 令牌/SSH:用于授权访问 github / gitee 仓库的私人令牌或 token
+  - 🚀 同步冲突时生成冲突文档:开启后冲突发生时会在本地生成冲突文档;关闭后仅弹框提示,不生成冲突文档
+  - 🚀 同步范围:见【功能菜单】→【同步范围】
+  - 🚀 同步模式:见【功能菜单】→【同步模式】
+  - 🚀 同步间隔:自动同步模式下的同步时间间隔
+  - 🚀 上次提交 SHA 值:展示本机上次提交记录的哈希值,不可修改
+  - 🚀 上次提交时间:展示本机上次提交的时间,不可修改
 
-## Sync status & conflict handling (new in 0.3.0-dev-00)
+## 同步状态与冲突处理(0.3.1 新增)
 
-The plugin now has a complete **conflict-handling loop** and no longer spams transient
-error toasts while auto sync keeps failing.
+插件新增了完整的**冲突处理闭环**,并修复了冲突时反复弹提示、无法得知当前状态的问题。
 
 ```text
-Conflict detected
+发现冲突
    ↓
-🔴 Conflict state
+🔴 冲突状态
    ↓
-Auto sync paused
+暂停自动同步
    ↓
-User notified
+通知用户
    ↓
-User chooses
-   ├── Keep local version
-   ├── Keep remote version
-   ├── Open conflict document
-   └── Later
+用户选择
+   ├── 保留本地版本
+   ├── 保留远端版本
+   ├── 打开冲突文档
+   └── 稍后处理
    ↓
-Conflict resolved
+解决冲突
    ↓
-🟢 Auto sync resumed
+🟢 恢复自动同步
 ```
 
-### What you see on conflict
+### 冲突发生时你会看到
 
-1. The top-bar plugin icon turns 🔴 red and blinks (tooltip: "Conflict unresolved, auto sync paused");
-2. A persistent dialog "⚠️ Sync conflict detected" shows the conflicted file path;
-3. **Auto sync is paused** — no more repeated sync attempts or repeated error toasts.
+1. 顶栏插件图标变为 🔴 红色并闪烁(悬停提示「冲突未解决,自动同步已暂停」);
+2. 弹出「⚠️ 检测到同步冲突」对话框,列出冲突文件路径;
+3. **自动同步暂停**,不再反复触发、反复报错。
 
-### Your options
+### 你可以选择
 
-| Action | Effect |
+| 操作 | 效果 |
 |---|---|
-| Keep local version | Forced "local overwrites cloud" sync + commit; auto sync resumes afterwards |
-| Keep remote version | Forced "cloud overwrites local" sync + commit; auto sync resumes afterwards |
-| Open conflict document | Best-effort search & open of the generated `_conflict_` document (stays paused) |
-| Later | Close the dialog, stay paused (red badge remains); you can handle it any time later |
+| 保留本地版本 | 强制「本地覆盖远端」并提交,完成后自动恢复自动同步 |
+| 保留远端版本 | 强制「远端覆盖本地」并提交,完成后自动恢复自动同步 |
+| 打开冲突文档 | 尝试定位并打开生成的 `_conflict_` 冲突文档(保持暂停) |
+| 稍后处理 | 关闭弹窗,继续保持暂停(红色徽标仍在),之后可随时再点击处理 |
 
-> If "Generate conflict document on sync conflict" is enabled, conflict documents are
-> created next to the original (file name contains the `_conflict_` prefix) and can be
-> deleted after resolution.
+> 若「同步冲突时生成冲突文档」已开启,冲突文档会生成在原文档旁
+> (文件名含 `_conflict_` 前缀),解决冲突后可自行删除。
 
-### Other states
+### 其它状态
 
-- Syncing: the top-bar icon rotates;
-- Sync failure (network / token / repository not initialized): keeps the original error prompts;
-- The paused state is **persisted**, so it survives a SiYuan restart until you resolve the conflict.
+- 同步中:顶栏图标旋转;
+- 同步失败(网络 / Token 配置 / 仓库未初始化等):保持原有错误提示;
+- 冲突暂停状态会被保存,**重启思源后仍保持暂停**,直到你处理完毕。
 
-Design details: [docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md).
+详细设计见 [docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md)。
 
-## Usage
+## 使用说明
 
-- Install (direct): copy the plugin package files at the repo root
-  (`index.js`, `index.css`, `plugin.json`, `i18n/`, `icon.png`, `preview.png`,
-  plus `README.md`) into `data/plugins/SGSP/` in the SiYuan workspace,
-  then restart SiYuan.
-- Install (recommended): download `SGSP-<version>.zip` from the
-  **GitHub Actions artifacts** or a **v* tag Release**, unzip it into
-  `data/plugins/SGSP/`.
-- First run: fill in platform / repository / username / email / token in settings, then click [Start synchronization].
-- It is recommended to verify the sync direction with a test repository first.
+- 安装方式一(直接使用):将本仓库根目录的插件文件(GIT-SYNC 插件包)
+  `index.js`、`index.css`、`plugin.json`、`i18n/`、`icon.png`、`preview.png`
+  连同 `README.md` 放入思源工作空间 `data/plugins/SGSP/`,然后重启思源;
+- 安装方式二(推荐):从本仓库的 **GitHub Actions 构建产物** 或 **v* 标签 Release**
+  下载 `SGSP-<版本>.zip`,解压后放入 `data/plugins/SGSP/`;
+- 首次使用:在设置界面填写平台 / 仓库 / 用户名 / 邮箱 / Token 后点击【开始同步】;
+- 建议先在一个测试仓库验证同步方向,再接入真实笔记数据。
 
-> Official detailed guide (external): [GIT sync plugin instructions](https://kdocs.cn/l/caGt3BWn9r5G?linkname=ArymAS7rZm)
+> 官方详细使用说明(外部文档):[GIT同步插件使用说明](https://kdocs.cn/l/caGt3BWn9r5G?linkname=ArymAS7rZm)
 
-## Project layout (developers)
+## 项目结构(开发者)
 
 ```
-├── index.js                build output: official v0.3.0 bundle + conflict-flow injection (committed)
-├── index.css / plugin.json / i18n/ / icon.png / preview.png   plugin package files (repo root IS the package)
-├── vendor/index.js         official v0.3.0 bundle (patch input; read-only reference)
-├── vendor/index.beautified.js   beautified official bundle (for analysis)
-├── src/sync-flow-runtime.js     conflict loop / state machine / notifications (single source of truth)
-├── patch/apply-patch.mjs        patch injection & build script (shared by CI and local)
-├── tests/                      unit tests (node --test)
-├── smoke/                      end-to-end smoke verification (siyuan stub)
-├── docs/                       design docs (conflict workflow / refactor notes)
-├── .github/workflows/build.yml    GitHub Actions: test → build → package → release
-└── README.md / README_zh_CN.md / CHANGELOG.md
+├── index.js                构建产物:官方 v0.3.0 bundle + 冲突闭环注入(提交入库)
+├── index.css / plugin.json / i18n/ / icon.png / preview.png   插件包文件(根目录即插件包)
+├── vendor/index.js         官方 v0.3.0 原版 bundle(补丁输入,只读参照)
+├── vendor/index.beautified.js   官方原版 bundle 美化版(人工分析用)
+├── src/sync-flow-runtime.js    冲突闭环 / 状态机 / 通知 源码(单一事实来源)
+├── patch/apply-patch.mjs       补丁注入与构建脚本(CI 与本地共用)
+├── tests/                     单元测试(node --test)
+├── smoke/                     端到端冒烟验证(siyuan stub)
+├── docs/                      设计文档(冲突闭环 / 重构说明)
+├── .github/workflows/build.yml    GitHub Actions:测试 → 构建 → 打包 → 发布
+└── README.md / README_en_US.md / CHANGELOG.md
 ```
 
-> Rebuild the plugin package: `node patch/apply-patch.mjs` (idempotent; default version
-> `0.3.0-dev-00`, override with the `GIT_SYNC_VERSION` env var; CI runs it automatically).
+> 重新构建插件包: `node patch/apply-patch.mjs`(幂等,默认版本 `0.3.1`,
+> 可用环境变量 `GIT_SYNC_VERSION` 覆盖,CI 自动执行)。
 
-## Precautions
+## 注意事项
 
-> [GIT sync plug-in - disclaimer](https://kdocs.cn/l/caGt3BWn9r5G?linkname=hMZxlMSs8z) <br>
-> The software (hereinafter referred to as "the Software") is developed by an individual and aims to provide users with note-data synchronization. By using the Software, you signify that you have read, understood and agreed to the entire contents of this disclaimer.
+> [GIT同步插件-免责声明](https://kdocs.cn/l/caGt3BWn9r5G?linkname=hMZxlMSs8z) <br>
+> 本软件(以下简称“本软件”)由个人开发,旨在为用户提供笔记数据同步功能。使用本软件即表示您已阅读、理解并同意本免责声明的全部内容。
 
-+ 💻 1. Data security
-  - 🚀 As this plug-in is developed by an individual, system testing may be limited. **Users are advised to enable SiYuan snapshots or back up data regularly** in case of data loss.
-  - 🚀 The use of this plug-in may involve unforeseen risks, such as data loss, corruption, or synchronization errors. Users should assess the risks of use on their own, to the extent permitted by applicable law.
-+ 💻 2. Privacy and permissions
-  - 🚀 The software does not actively collect, store, or share users' personal information. All data processing is carried out locally on user devices or in Git repositories authorized by the user.
-  - 🚀 Users should properly manage their Git accounts, API tokens, and related credentials, and are responsible for their data security and access.
-+ 💻 3. Risk of use
-  - 🚀 Users use the Software at their own risk. The developer shall not be liable for any direct or indirect losses arising from the use of the Software, including but not limited to data loss, account blocking, device damage, or third-party liability.
-+ 💻 4. Others
-  - 🚀 For other considerations, see the disclaimer in the plugin settings or the external document above.
++ 💻 1. 数据安全
+  - 🚀 由于本插件为个人开发,系统测试可能有限,**建议用户启用思源笔记的快照功能或定期备份数据**,以防数据丢失。
+  - 🚀 使用本插件可能存在不可预见的风险,如数据丢失、损坏或同步错误。在适用法律允许的范围内,用户应自行评估使用风险。
++ 💻 2. 隐私与权限
+  - 🚀 本软件不会主动收集、存储或共享用户的个人信息,所有数据处理均在用户设备本地或用户授权的 Git 代码仓库中进行。
+  - 🚀 用户应妥善管理自己的 Git 账户、API 令牌(Token)及相关凭据,并对其数据安全和访问权限负责。
++ 💻 3. 使用风险
+  - 🚀 用户须自行承担使用本软件的风险,开发者不对因使用本软件引发的任何直接或间接损失承担责任,包括但不限于数据丢失、账户封禁、设备损坏或第三方责任等。
++ 💻 4. 其他
+  - 🚀 其他注意事项详见插件设置界面中的【免责声明】或上述外部文档。
 
-## Project management
+## 项目管理
 
-1. Changelog (in-repo): [CHANGELOG.md](./CHANGELOG.md)
-2. Conflict workflow design: [docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md)
-3. Refactor notes: [docs/REFACTOR-NOTES.md](./docs/REFACTOR-NOTES.md)
-4. Official documents (external): [features](https://kdocs.cn/l/caGt3BWn9r5G?linkname=k7VAb4Wx5b), [usage](https://kdocs.cn/l/caGt3BWn9r5G?linkname=ArymAS7rZm), [disclaimer](https://kdocs.cn/l/caGt3BWn9r5G?linkname=hMZxlMSs8z)
-5. Feedback: [👥 SGSP feedback group (QQ: 1015180920)](https://kdocs.cn/l/caGt3BWn9r5G?linkname=Ij7mC9wG6q)
-6. FAQ: [FAQ document](https://kdocs.cn/l/cf8qSfWUdi1O)
+1. 更新日志(仓库内):[CHANGELOG.md](./CHANGELOG.md)
+2. 冲突处理闭环设计:[docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md)
+3. 重构说明:[docs/REFACTOR-NOTES.md](./docs/REFACTOR-NOTES.md)
+4. 官方详细说明(外部文档):[功能列表](https://kdocs.cn/l/caGt3BWn9r5G?linkname=k7VAb4Wx5b)、[使用说明](https://kdocs.cn/l/caGt3BWn9r5G?linkname=ArymAS7rZm)、[免责声明](https://kdocs.cn/l/caGt3BWn9r5G?linkname=hMZxlMSs8z)
+5. 反馈沟通:[👥思源-git同步插件反馈群(QQ群:1015180920)](https://kdocs.cn/l/caGt3BWn9r5G?linkname=Ij7mC9wG6q)
+6. 常见问题答疑:[FAQ 文档](https://kdocs.cn/l/cf8qSfWUdi1O)

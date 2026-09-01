@@ -75,7 +75,7 @@ const CSS_FILE = path.join(ROOT, "index.css"); // 插件包样式(就地追加)
 const PLUGIN_JSON = path.join(ROOT, "plugin.json"); // 插件包元数据(就地写版本)
 
 /** 默认版本号;可用环境变量 GIT_SYNC_VERSION 覆盖(CI 注入) */
-const DEFAULT_VERSION = "0.3.0-dev-00";
+const DEFAULT_VERSION = "0.3.1";
 const VERSION = process.env.GIT_SYNC_VERSION || DEFAULT_VERSION;
 
 const MARKER = "__gSyncFlow"; // 已注入标记
@@ -98,6 +98,8 @@ const I18N_KEYS_ZH = {
   gSyncResolveFailedMsg: "❌ 处理冲突的同步失败,冲突仍待处理",
   gSyncOpenDocHint:
     "冲突文档已生成在原文档旁(文件名含 _conflict_ 前缀),请在左侧文件树中打开查看",
+  gSyncRuntimeLogsTitle: "SGSP 运行日志",
+  gSyncHistoryError: "❌ 同步历史面板暂时无法打开,请稍后重试",
 };
 
 const I18N_KEYS_EN = {
@@ -119,6 +121,8 @@ const I18N_KEYS_EN = {
   gSyncResolveFailedMsg: "❌ Resolution sync failed, conflict still pending",
   gSyncOpenDocHint:
     "The conflict doc was created next to the original (name contains _conflict_ prefix). Open it in the file tree.",
+  gSyncRuntimeLogsTitle: "SGSP runtime logs",
+  gSyncHistoryError: "❌ The sync history panel is unavailable. Please try again later.",
 };
 
 const CSS_MARK = "git-sync-conflict-paused"; // 徽标样式是否已注入的标记
@@ -205,7 +209,13 @@ function patchIndex(js) {
     'async onLayoutReady(){S.info("onLayoutReady"),__gSyncFlow&&__gSyncFlow.attachBadge(),await this.registerPluginButton(),await this.initPluginLayoutData()}'
   );
 
-  /* ---------- 4. syncDataToCloud 改名 + 包装 ---------- */
+  /* ---------- 4. 运行日志菜单入口 ---------- */
+  const historyMenuAnchor = 's.addItem({icon:"iconHistory",label:this.i18n.syncHistory,click:()=>{this.openSyncHistoryPanel()}})';
+  assertAnchor(js, historyMenuAnchor, "同步历史菜单");
+  const logsMenuItem = 's.addItem({icon:"iconInfo",label:this.i18n.gSyncRuntimeLogsTitle||"SGSP 运行日志",click:()=>{const host=__gSyncFlow||__gEnsureSyncFlow(this);host.showRuntimeLogs()}}),';
+  js = js.replace(historyMenuAnchor, logsMenuItem + historyMenuAnchor);
+
+  /* ---------- 5. syncDataToCloud 改名 + 包装 ---------- */
   const startM = "async syncDataToCloud(t=void 0,s=!1){";
   const endAnchor = "async registerPluginButton(){";
   assertAnchor(js, startM, "syncDataToCloud 方法开头");
@@ -230,7 +240,25 @@ function patchIndex(js) {
     'async startAutoSync(t,s,i="every",...o){if(__gSyncFlow&&__gSyncFlow.isPausedConflict())return;let __cb=t;if(__gSyncFlow&&__cb){const __raw=__cb;__cb=function(){__gSyncFlow.markAutoTick(),__raw.apply(this,arguments)}}this.timerTask&&this.timerTask.removeSelf(),s||(s=this.settingUtils.get(je)),s=s*1e3,i=="every"?this.timerTask=new Vi(__cb,s,o):i=="once"&&(this.timerTask=new Wi(__cb,s,o)),this.timerTask.start()}'
   );
 
-  /* ---------- 6. gitUtil 错误向状态机传播 ---------- */
+  /* ---------- 6. 同步历史面板挂载保护 ---------- */
+  const historyStart = "async openSyncHistoryPanel(){";
+  const historyEnd = "async openPayMentPlanPanel(){";
+  assertAnchor(js, historyStart, "openSyncHistoryPanel 方法开头");
+  assertAnchor(js, historyEnd, "openPayMentPlanPanel 方法开头");
+  const hi = js.indexOf(historyStart);
+  const he = js.indexOf(historyEnd, hi);
+  const historyBody = js.slice(hi, he);
+  if (!historyBody.endsWith("}")) fail("openSyncHistoryPanel 方法体解析异常(未以 } 结尾)");
+  let historyInner = historyBody.slice(historyStart.length, historyBody.length - 1);
+  const historyGuard =
+    '});if(!t.element||!t.element.querySelector||!t.element.querySelector("#syncHistory")){const host=__gSyncFlow||__gEnsureSyncFlow(this);host.addLog("error","同步历史面板挂载节点不存在");host.notify(host.i18n("gSyncHistoryError","❌ 同步历史面板暂时无法打开,请稍后重试"),"error");return}let s=new Qc';
+  if (!historyInner.includes("}),s=new Qc")) fail("openSyncHistoryPanel 挂载点锚点不存在");
+  historyInner = historyInner.replace("}),s=new Qc", historyGuard);
+  const historyMethod =
+    "async openSyncHistoryPanel(){try{" + historyInner + "}catch(err){const host=__gSyncFlow||__gEnsureSyncFlow(this);host.addLog(\"error\",\"同步历史面板打开失败: \"+(err&&err.message?err.message:err));host.notify(host.i18n(\"gSyncHistoryError\",\"❌ 同步历史面板暂时无法打开,请稍后重试\"),\"error\");}}";
+  js = js.slice(0, hi) + historyMethod + js.slice(he);
+
+  /* ---------- 7. gitUtil 错误向状态机传播 ---------- */
   const anchorsGitUtil = [
     'He([we({rethrow:!1})],xe.prototype,"handleRemoteCoverLocal")',
     'He([we({rethrow:!1})],xe.prototype,"handleLocalCoverRemote")',

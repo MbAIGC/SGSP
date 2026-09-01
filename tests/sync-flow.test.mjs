@@ -101,6 +101,7 @@ function makeFakePlugin(opts = {}) {
       };
 
   const q = opts.q || makeFakeQ();
+  plugin._q = q;
 
   // 创建宿主并挂到插件上(模拟 __gEnsureSyncFlow)
   plugin.__gSyncFlowHost = createSyncFlowHost(plugin, q);
@@ -297,6 +298,8 @@ test("非冲突错误: 状态 FAILED 并重新抛出", async () => {
   const host = p.__gSyncFlowHost;
   await assert.rejects(() => host.runSync(undefined, false), /网络错误/);
   assert.equal(host.state, SyncState.FAILED);
+  assert.ok(p._q._msgs.some((m) => m.type === "error" && /同步失败: 网络错误/.test(m.msg)));
+  assert.ok(host.logEntries.some((entry) => entry.level === "error" && /网络错误/.test(entry.message)));
 });
 
 test("持久化恢复: 重启后保持冲突暂停状态", async () => {

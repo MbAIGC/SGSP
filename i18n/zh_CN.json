@@ -178,5 +178,7 @@
     "gSyncConflictMsg": "🔴 检测到同步冲突,自动同步已暂停",
     "gSyncResolvedMsg": "✅ 冲突已处理,自动同步已恢复",
     "gSyncResolveFailedMsg": "❌ 处理冲突的同步失败,冲突仍待处理",
-    "gSyncOpenDocHint": "冲突文档已生成在原文档旁(文件名含 _conflict_ 前缀),请在左侧文件树中打开查看"
+    "gSyncOpenDocHint": "冲突文档已生成在原文档旁(文件名含 _conflict_ 前缀),请在左侧文件树中打开查看",
+    "gSyncRuntimeLogsTitle": "SGSP 运行日志",
+    "gSyncHistoryError": "❌ 同步历史面板暂时无法打开,请稍后重试"
 }

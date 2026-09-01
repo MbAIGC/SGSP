@@ -2,7 +2,7 @@
   "name": "SGSP",
   "author": "MbAIGC",
   "url": "https://github.com/MbAIGC/SGSP",
-  "version": "0.3.0-dev-00",
+  "version": "0.3.1",
   "minAppVersion": "3.0.12",
   "backends": [
     "windows",
@@ -29,8 +29,8 @@
     "zh_CN": "Git Sync Plugin 是一款用于将本地笔记文件同步到 GitHub 和 Gitee 仓库的工具。通过集成 GitHub 和 Gitee 的 API，用户可以轻松地将笔记文件推送到远程仓库，实现多设备同步和版本控制。"
   },
   "readme": {
-    "en_US": "README.md",
-    "zh_CN": "README_zh_CN.md"
+    "en_US": "README_en_US.md",
+    "zh_CN": "README.md"
   },
   "funding": {
     "custom": [

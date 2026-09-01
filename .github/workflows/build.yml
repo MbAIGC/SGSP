@@ -2,7 +2,7 @@ name: Build & Test
 
 # 触发:
 #   - 推送到 main 分支: 跑测试 + 重新生成插件包 + 上传构建产物
-#   - 推送 v* 标签(如 v0.3.0-dev-00): 额外创建 GitHub Release 并上传 SGSP zip 包
+#   - 推送 v* 标签(如 v0.3.1): 额外创建 GitHub Release 并上传 SGSP zip 包
 #   - 手动触发(workflow_dispatch): 可自定义版本号
 on:
   push:
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "插件版本号(留空: tag 触发用 tag 名,v0.3.0-dev-00 省略 v 前缀;否则默认 0.3.0-dev-00)"
+        description: "插件版本号(留空: tag 触发用 tag 名,v0.3.1 省略 v 前缀;否则默认 0.3.0-dev-00)"
         required: false
         default: ""
 
@@ -40,7 +40,7 @@ jobs:
               V="${GITHUB_REF#refs/tags/}"
               V="${V#v}"
             else
-              V="0.3.0-dev-00"
+              V="0.3.1"
             fi
           fi
           echo "version=$V"
@@ -65,7 +65,7 @@ jobs:
           mkdir -p dist
           zip -r -q dist/SGSP-${{ steps.ver.outputs.version }}.zip \
             index.js index.css plugin.json i18n icon.png preview.png \
-            README.md README_zh_CN.md
+            README.md README_en_US.md
           ls -la dist/
 
       - name: Upload build artifact

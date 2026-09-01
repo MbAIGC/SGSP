@@ -1,7 +1,7 @@
 # 重构说明 / Refactor Notes
 
 > 对象:SGSP（Fork 自 `sy-git-sync-plugin` v0.3.0 官方 release 打包产物）
-> 产物:仓库根目录即插件包(`index.js` 为注入后的构建产物,版本 `0.3.0-dev-00`)
+> 产物:仓库根目录即插件包(`index.js` 为注入后的构建产物,版本 `0.3.1`)
 > 代码:— `src/sync-flow-runtime.js`(新逻辑,单一事实来源)
 >      — `patch/apply-patch.mjs`(注入/构建脚本)
 >      — `tests/`(单元测试)、`smoke/verify.mjs`(端到端验证)
@@ -68,7 +68,7 @@ Release 附件的 `package.zip` 中（当前仓库的 `vendor/` 目录保留官�
 | 4 | `syncDataToCloud` | 原方法改名 `__gSyncDataToCloudBase`,新增包装方法(冲突接管入口) |
 | 5 | `startAutoSync` | 定时回调打 `autoTick` 标记,用于区分「定时触发/用户触发」 |
 
-另:i18n(15 个新文案键)、`index.css`(冲突徽标样式)、`plugin.json`(版本 0.3.0-dev-00)。
+另:i18n(15 个新文案键)、`index.css`(冲突徽标样式)、`plugin.json`(版本 0.3.1)。
 
 ### 3.3 为什么这样设计
 
@@ -86,7 +86,7 @@ Release 附件的 `package.zip` 中（当前仓库的 `vendor/` 目录保留官�
 node --test tests/sync-flow.test.mjs
 
 # 2) 构建插件包文件（幂等；从 vendor/index.js 官方原版重新生成根目录 index.js,
-#    并就地补齐 i18n / index.css / plugin.json;默认版本 0.3.0-dev-00,
+#    并就地补齐 i18n / index.css / plugin.json;默认版本 0.3.1,
 #    可用 GIT_SYNC_VERSION 覆盖,CI 自动执行)
 node patch/apply-patch.mjs
 
@@ -105,7 +105,7 @@ GitHub Release 并附上 zip。
   放到 `data/plugins/SGSP/`,在思源里重新加载插件(或重启思源)。
 - 回滚:删除 `data/plugins/SGSP/`,从原项目 Release 重新下载
   `package.zip` 解压安装即可恢复 v0.3.0。
-- 若从 0.3.0-dev-00 回滚到官方版,冲突暂停状态文件
+- 若从 0.3.1 回滚到官方版,冲突暂停状态文件
   (`data/storage/petal/SGSP/git-sync-flow.json`)可手动删除；旧版状态文件仍使用原插件目录名，升级时请按实际安装目录检查。
 
 ## 6. 已知限制与后续建议
@@ -130,6 +130,6 @@ GitHub Release 并附上 zip。
 ├── docs/CONFLICT-WORKFLOW.md   新增:冲突处理闭环设计
 ├── docs/REFACTOR-NOTES.md      本文件
 ├── CHANGELOG.md                改写:仓库内自包含更新日志
-├── README.md / README_zh_CN.md 改写:修复文档问题 + 新增状态章节
+├── README.md / README_en_US.md 改写:修复文档问题 + 新增状态章节
 └── SGSP-<版本>.zip              CI 生成的可安装插件包
 ```
