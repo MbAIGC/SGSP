@@ -35,7 +35,7 @@ function makeFakePlugin(opts = {}) {
     i18n: Object.assign(
       {
         isSyncingInfo: "正在同步中",
-        addTopBarIcon: "GIT同步插件",
+        addTopBarIcon: "SGSP",
       },
       opts.i18n || {}
     ),

@@ -2,7 +2,7 @@ name: Build & Test
 
 # 触发:
 #   - 推送到 main 分支: 跑测试 + 重新生成插件包 + 上传构建产物
-#   - 推送 v* 标签(如 v0.3.0-dev-00): 额外创建 GitHub Release 并上传 package.zip
+#   - 推送 v* 标签(如 v0.3.0-dev-00): 额外创建 GitHub Release 并上传 SGSP zip 包
 #   - 手动触发(workflow_dispatch): 可自定义版本号
 on:
   push:
@@ -63,7 +63,7 @@ jobs:
       - name: Package plugin zip
         run: |
           mkdir -p dist
-          zip -r -q dist/GIT-SYNC-PLUGIN-${{ steps.ver.outputs.version }}.zip \
+          zip -r -q dist/SGSP-${{ steps.ver.outputs.version }}.zip \
             index.js index.css plugin.json i18n icon.png preview.png \
             README.md README_zh_CN.md
           ls -la dist/
@@ -71,7 +71,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GIT-SYNC-PLUGIN-${{ steps.ver.outputs.version }}
+          name: SGSP-${{ steps.ver.outputs.version }}
           path: dist/*.zip
 
       - name: Publish GitHub Release (only on tag push)

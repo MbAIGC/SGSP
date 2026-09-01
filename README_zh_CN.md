@@ -1,11 +1,12 @@
-# GIT同步插件
+# SGSP
 
 [English](./README.md)
 
-GIT同步插件是一个由 `xstarling` 开发、用于在本地文件与 GITHUB / GITEE 代码仓库之间进行数据同步的思源笔记插件。
+SGSP 是由 `MbAIGC` 维护的思源笔记 Git 同步插件，用于在本地文件与 GitHub / Gitee 代码仓库之间同步数据。
 
-> 本仓库当前为 **0.3.0-dev-00 重构版**:在官方 v0.3.0 的基础上,修复了同步状态通知问题,
-> 新增了完整的冲突处理闭环(见下方「同步状态与冲突处理」章节)。
+> 本项目 Fork 自 [xstarling/sy-git-sync-plugin](https://github.com/xstarling/sy-git-sync-plugin) 的 v0.3.0 发布包。
+> 为避免与原插件重名，Fork 后改名为 **SGSP**；感谢并致敬原作者 [xstarling](https://github.com/xstarling) 的设计与实现。
+> 当前版本在原插件基础上修复同步状态通知问题，并新增完整的冲突处理闭环（见下方「同步状态与冲突处理」章节）。
 > 重构说明见 [docs/REFACTOR-NOTES.md](./docs/REFACTOR-NOTES.md)。
 
 ## 更新日志
@@ -116,9 +117,9 @@ GIT同步插件是一个由 `xstarling` 开发、用于在本地文件与 GITHUB
 
 - 安装方式一(直接使用):将本仓库根目录的插件文件(GIT-SYNC 插件包)
   `index.js`、`index.css`、`plugin.json`、`i18n/`、`icon.png`、`preview.png`
-  连同 `README.md` 放入思源工作空间 `data/plugins/GIT-SYNC-PLUGIN/`,然后重启思源;
+  连同 `README.md` 放入思源工作空间 `data/plugins/SGSP/`,然后重启思源;
 - 安装方式二(推荐):从本仓库的 **GitHub Actions 构建产物** 或 **v* 标签 Release**
-  下载 `GIT-SYNC-PLUGIN-<版本>.zip`,解压后放入 `data/plugins/GIT-SYNC-PLUGIN/`;
+  下载 `SGSP-<版本>.zip`,解压后放入 `data/plugins/SGSP/`;
 - 首次使用:在设置界面填写平台 / 仓库 / 用户名 / 邮箱 / Token 后点击【开始同步】;
 - 建议先在一个测试仓库验证同步方向,再接入真实笔记数据。
 

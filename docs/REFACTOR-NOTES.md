@@ -1,6 +1,6 @@
 # 重构说明 / Refactor Notes
 
-> 对象:`sy-git-sync-plugin` v0.3.0(官方 release 打包产物)
+> 对象:SGSP（Fork 自 `sy-git-sync-plugin` v0.3.0 官方 release 打包产物）
 > 产物:仓库根目录即插件包(`index.js` 为注入后的构建产物,版本 `0.3.0-dev-00`)
 > 代码:— `src/sync-flow-runtime.js`(新逻辑,单一事实来源)
 >      — `patch/apply-patch.mjs`(注入/构建脚本)
@@ -11,7 +11,7 @@
 
 官方 GitHub 仓库 `xstarling/sy-git-sync-plugin` 的 `main` 分支**只包含文档与资源文件**
 (README、plugin.json、图标、预览图),真正的插件代码只以打包产物形式发布在
-Release 附件的 `package.zip` 中(本仓库 `package/` 目录即 v0.3.0 解包结果,`index.js`
+Release 附件的 `package.zip` 中（当前仓库的 `vendor/` 目录保留官方 v0.3.0 基线，`index.js`
 为压缩后的插件本体)。
 
 因此本次重构选择:**对官方打包产物做可控的「源码级补丁注入」**,而不是重写同步算法。
@@ -85,7 +85,7 @@ Release 附件的 `package.zip` 中(本仓库 `package/` 目录即 v0.3.0 解包
 # 1) 单元测试(15 项)
 node --test tests/sync-flow.test.mjs
 
-# 2) 构建插件包文件(幂等;从 vendor/index.js 官方原版重新生成根目录 index.js,
+# 2) 构建插件包文件（幂等；从 vendor/index.js 官方原版重新生成根目录 index.js,
 #    并就地补齐 i18n / index.css / plugin.json;默认版本 0.3.0-dev-00,
 #    可用 GIT_SYNC_VERSION 覆盖,CI 自动执行)
 node patch/apply-patch.mjs
@@ -96,17 +96,17 @@ node smoke/verify.mjs
 
 仓库根目录即插件包:`.github/workflows/build.yml` 会在 push/tag 时执行以上流程,
 并把 `index.js + index.css + plugin.json + i18n/ + icon.png + preview.png + README*`
-打包为 `GIT-SYNC-PLUGIN-<版本>.zip` 上传 artifact;推送 `v*` 标签时还会自动创建
+打包为 `SGSP-<版本>.zip` 上传 artifact;推送 `v*` 标签时还会自动创建
 GitHub Release 并附上 zip。
 
 ## 5. 安装与回滚
 
-- 安装:把仓库根目录插件包文件(或 CI/Release 下载的 `GIT-SYNC-PLUGIN-<版本>.zip`)
-  放到 `data/plugins/GIT-SYNC-PLUGIN/`,在思源里重新加载插件(或重启思源)。
-- 回滚:删除 `data/plugins/GIT-SYNC-PLUGIN/`,从官方 Release 重新下载
+- 安装:把仓库根目录插件包文件(或 CI/Release 下载的 `SGSP-<版本>.zip`)
+  放到 `data/plugins/SGSP/`,在思源里重新加载插件(或重启思源)。
+- 回滚:删除 `data/plugins/SGSP/`,从原项目 Release 重新下载
   `package.zip` 解压安装即可恢复 v0.3.0。
 - 若从 0.3.0-dev-00 回滚到官方版,冲突暂停状态文件
-  (`data/storage/petal/GIT-SYNC-PLUGIN/git-sync-flow.json`)可手动删除。
+  (`data/storage/petal/SGSP/git-sync-flow.json`)可手动删除；旧版状态文件仍使用原插件目录名，升级时请按实际安装目录检查。
 
 ## 6. 已知限制与后续建议
 
@@ -131,5 +131,5 @@ GitHub Release 并附上 zip。
 ├── docs/REFACTOR-NOTES.md      本文件
 ├── CHANGELOG.md                改写:仓库内自包含更新日志
 ├── README.md / README_zh_CN.md 改写:修复文档问题 + 新增状态章节
-└── dist/GIT-SYNC-PLUGIN/       生成物:可安装插件包(v0.3.1)
+└── SGSP-<版本>.zip              CI 生成的可安装插件包
 ```

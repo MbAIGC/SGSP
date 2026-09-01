@@ -5,7 +5,7 @@
 
 class Plugin {
   constructor() {
-    this.name = "GIT-SYNC-PLUGIN";
+    this.name = "SGSP";
     this.i18n = {};
     this.data = {};
   }

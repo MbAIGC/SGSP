@@ -17,6 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
 const BUNDLE = path.join(ROOT, "index.js");
+const PLUGIN_JSON = path.join(ROOT, "plugin.json");
 const I18N_ZH = path.join(ROOT, "i18n", "zh_CN.json");
 
 if (!fs.existsSync(BUNDLE)) {
@@ -50,6 +51,7 @@ const Cls = bundle.default || bundle;
 
 const p = new Cls();
 p.i18n = JSON.parse(fs.readFileSync(I18N_ZH, "utf8"));
+const pluginMeta = JSON.parse(fs.readFileSync(PLUGIN_JSON, "utf8"));
 
 let timerRemoved = false;
 p.timerTask = { removeSelf() { timerRemoved = true; } };
@@ -88,6 +90,7 @@ function check(label, cond) {
 await p.syncDataToCloud();
 const host = p.__gSyncFlowHost;
 
+check("插件标识 = SGSP", pluginMeta.name === "SGSP" && p.name === "SGSP");
 check("状态 = conflict_paused", host.state === "conflict_paused");
 check("自动同步定时器已暂停", timerRemoved === true);
 check("冲突详情已提取", host.conflictDetail && host.conflictDetail.path === "data/20210808180117-czj9bvb/note.sy");

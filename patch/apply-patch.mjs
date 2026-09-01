@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * ============================================================================
- * GIT 同步插件 —— 冲突处理闭环补丁/构建脚本
+ * SGSP —— 冲突处理闭环补丁/构建脚本
  * ============================================================================
  *
  * 仓库布局(根目录即插件包):
@@ -175,6 +175,12 @@ function patchIndex(js) {
     fail("vendor/index.js 已包含注入标记,请从官方 Release 重新获取原版 bundle,避免二次注入");
   }
 
+  // 运行产物使用 SGSP 自身目录，避免把插件配置和凭据同步到远端。
+  js = js
+    .replaceAll("data/plugins/GIT-SYNC-PLUGIN/*", "data/plugins/SGSP/*")
+    .replaceAll("data/storage/petal/GIT-SYNC-PLUGIN/*", "data/storage/petal/SGSP/*")
+    .replaceAll("temp/GIT-SYNC-PLUGIN/backup/", "temp/SGSP/backup/");
+
   /* ---------- 1. 注入运行时 ---------- */
   const anchorSdk = 'const q=require("siyuan");';
   assertAnchor(js, anchorSdk, "siyuan SDK require");
@@ -295,7 +301,7 @@ function main() {
   ok("i18n 已补齐(" + (zh + en) + " 个键,zh=" + zh + " en=" + en + ")");
   ok(cssChanged ? "index.css 已追加冲突徽标样式" : "index.css 徽标样式已存在,跳过");
   ok("plugin.json 版本号 " + ver.old + " → " + ver.now);
-  console.log("\n[apply-patch] 完成。根目录即为可安装的插件包(复制到 data/plugins/GIT-SYNC-PLUGIN/)。");
+  console.log("\n[apply-patch] 完成。根目录即为可安装的插件包(复制到 data/plugins/SGSP/)。");
 }
 
 main();

@@ -1,5 +1,5 @@
 {
-    "addTopBarIcon": "GIT同步插件",
+    "addTopBarIcon": "SGSP",
     "cancel": "取消",
     "save": "保存",
     "byeMenu": "再见，菜单！",
@@ -19,7 +19,7 @@
     "disclaimeTitle": "免责声明",
     "disclaimeDesc": "本软件（以下简称“本软件”）由个人开发，旨在为用户提供笔记数据同步功能。使用本软件即表示您已阅读、理解并同意本免责声明的全部内容。<br> <strong>💻1. 数据安全</strong> <br> &nbsp&nbsp  🚀本软件在用户授权的前提下，通过 GitHub 或 Gitee 代码仓库平台的 API 接口将本地笔记文件同步至用户指定的 Git 仓库。<br>  &nbsp&nbsp 🚀本软件仅作为数据传输工具，不对数据的完整性、准确性或可用性作任何保证。<br>  &nbsp&nbsp 🚀由于不可抗力、硬件故障、软件缺陷、网络问题或第三方平台限制等原因导致的数据丢失、损坏或泄露，开发者不承担任何责任。<br>  &nbsp&nbsp 🚀由于本插件为个人开发，系统测试可能有限，<strong>建议用户启用思源笔记的快照功能或定期备份数据</strong>，以防数据丢失。<br>  &nbsp&nbsp 🚀 用户应理解并接受，<strong>使用本插件可能存在不可预见的风险</strong>，如数据丢失、损坏或同步错误。在适用法律允许的范围内，请用户用户应自行评估使用风险。<br>  &nbsp&nbsp 🚀 在适用法律允许的范围内，开发者不对因使用或无法使用本插件而导致的任何数据损失、业务中断或其他损害负责。<br>  <strong>💻2. 隐私与权限</strong>    <br>  &nbsp&nbsp 🚀本软件不会主动收集、存储或共享用户的个人信息，所有数据处理均在用户设备本地或用户授权的 Git 代码仓库中进行。<br>  &nbsp&nbsp 🚀    用户应妥善管理自己的 Git 账户、API 令牌（Token）及相关凭据，并对其数据安全和访问权限负责。<br>    <strong>💻3. 使用风险</strong>   <br> &nbsp&nbsp  🚀 本软件以“现状”提供，不对其适用性、可靠性、无错误性或兼容性作出任何保证。<br> &nbsp&nbsp  🚀   用户须自行承担使用本软件的风险，开发者不对因使用本软件引发的任何直接或间接损失承担责任，包括但不限于数据丢失、账户封禁、设备损坏或第三方责任等。<br>    <strong>💻4. 第三方服务依赖</strong>   <br> &nbsp&nbsp  🚀 本软件依赖 GitHub、Gitee 等第三方代码托管平台提供的 API 进行数据同步，相关服务的可用性、稳定性、安全性及政策变更由第三方平台决定，开发者无法控制亦不承担任何责任。<br>  &nbsp&nbsp 🚀   若 GitHub、Gitee 等平台发生访问受限、账号被封禁、API 调整或服务中断等情况，导致本软件无法正常使用，开发者不承担任何责任。<br>    <strong>💻5. 法律责任</strong>  <br>  &nbsp&nbsp 🚀  用户不得利用本软件进行任何违法、违规或侵权行为，否则由用户自行承担相应法律责任。<br>  &nbsp&nbsp 🚀    若因法律法规或政策调整导致本软件无法继续提供服务，开发者有权随时终止本软件的维护和更新，而无需对用户承担任何责任。<br>    <strong>💻6. 免责声明的更新</strong>   <br> &nbsp&nbsp  🚀 本免责声明可能会根据软件更新或法律要求进行调整，用户应不定期查阅最新版本。<br> <br>    <strong>使用本软件即表示您已充分理解并接受本免责声明的所有条款。如不同意本免责声明，请立即停止使用本软件。</strong>",
     "hintTitle": "关于",
-    "hintDesc": "<a href=\"https://qm.qq.com/q/fGxb6p0u3u\">👥思源-git同步插件反馈群（QQ群：1015180920）</a><br><a href=\"https://kdocs.cn/l/caGt3BWn9r5G\">📄项目详细说明文档</a><br><a href=\"https://kdocs.cn/l/cf8qSfWUdi1O\">📄FAQ常见问题答疑</a><br>💻 @xstarling<br>",
+    "hintDesc": "<a href=\"https://github.com/MbAIGC/SGSP\">SGSP 项目主页</a><br>维护者：MbAIGC<br>原项目：<a href=\"https://github.com/xstarling/sy-git-sync-plugin\">xstarling/sy-git-sync-plugin</a><br>",
     "startSync": "开始同步",
     "refreshOrRecover": "刷新/更新数据",
     "refreshWSTree": "刷新文件树",

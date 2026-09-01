@@ -184,11 +184,11 @@ export function createSyncFlowHost(plugin, q) {
         el.classList.add("git-sync-conflict-paused");
         el.title = i18n(
           "gSyncPausedTooltip",
-          "【GIT 同步】冲突未解决,自动同步已暂停,请点击处理"
+          "【SGSP】冲突未解决,自动同步已暂停,请点击处理"
         );
       } else {
         el.classList.remove("git-sync-conflict-paused");
-        const base = i18n("addTopBarIcon", "GIT同步插件");
+        const base = i18n("addTopBarIcon", "SGSP");
         if (base) el.title = base;
       }
     } catch (e) {

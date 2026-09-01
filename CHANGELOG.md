@@ -4,6 +4,12 @@
 > 历史版本条目来源于 GitHub Releases;`0.3.0-dev-00` 为本次重构开发版
 > (构建产物即仓库根目录插件包,CI 自动打包,见 `.github/workflows/build.yml`)。
 
+## SGSP（重命名版）
+
+- 为避免与原插件 `sy-git-sync-plugin` 重名，Fork 后将插件标识、显示名称、安装目录和 CI 产物统一改为 `SGSP`。
+- 当前维护者：`MbAIGC`。
+- 感谢并致敬原作者 [xstarling](https://github.com/xstarling)；原项目：[xstarling/sy-git-sync-plugin](https://github.com/xstarling/sy-git-sync-plugin)。
+
 ## 0.3.0-dev-00 (重构开发版 / Refactor dev build)
 
 本次重构 fork 自 v0.3.0 发布包,解决两大问题:

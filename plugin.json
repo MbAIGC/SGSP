@@ -1,7 +1,7 @@
 {
-  "name": "GIT-SYNC-PLUGIN",
-  "author": "xstarling",
-  "url": "https://github.com/xstarling/sy-git-sync-plugin",
+  "name": "SGSP",
+  "author": "MbAIGC",
+  "url": "https://github.com/MbAIGC/SGSP",
   "version": "0.3.0-dev-00",
   "minAppVersion": "3.0.12",
   "backends": [
@@ -21,8 +21,8 @@
     "desktop-window"
   ],
   "displayName": {
-    "en_US": "GIT SYNC PLUGIN",
-    "zh_CN": "GIT同步插件"
+    "en_US": "SGSP",
+    "zh_CN": "SGSP"
   },
   "description": {
     "en_US": "Git Sync Plugin is a tool for syncing local note files to GitHub and Gitee repositories. By integrating GitHub and Gitee apis, users can easily push note files to remote repositories, enabling multi-device synchronization and version control.",

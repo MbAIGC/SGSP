@@ -1,11 +1,12 @@
-# GIT sync plugin
+# SGSP
 
 [中文](./README_zh_CN.md)
 
-GIT Sync plugin is a SiYuan note plugin developed by `xstarling` for data synchronization between local files and GITHUB / GITEE code repositories.
+SGSP is a SiYuan Git synchronization plugin maintained by `MbAIGC` for synchronizing local files with GitHub and Gitee repositories.
 
-> This repository is currently at **0.3.0-dev-00 (refactor)**: built on top of the official v0.3.0,
-> it fixes the sync-status notification problems and adds a complete conflict-handling loop
+> This project is forked from the v0.3.0 release package of [xstarling/sy-git-sync-plugin](https://github.com/xstarling/sy-git-sync-plugin).
+> It is named **SGSP** to avoid sharing the original plugin's name. Many thanks and respect to the original author, [xstarling](https://github.com/xstarling), for the design and implementation.
+> This version fixes sync-status notification issues and adds a complete conflict-handling loop
 > (see "Sync status & conflict handling" below).
 > Refactor details: [docs/REFACTOR-NOTES.md](./docs/REFACTOR-NOTES.md).
 
@@ -119,11 +120,11 @@ Design details: [docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md).
 
 - Install (direct): copy the plugin package files at the repo root
   (`index.js`, `index.css`, `plugin.json`, `i18n/`, `icon.png`, `preview.png`,
-  plus `README.md`) into `data/plugins/GIT-SYNC-PLUGIN/` in the SiYuan workspace,
+  plus `README.md`) into `data/plugins/SGSP/` in the SiYuan workspace,
   then restart SiYuan.
-- Install (recommended): download `GIT-SYNC-PLUGIN-<version>.zip` from the
+- Install (recommended): download `SGSP-<version>.zip` from the
   **GitHub Actions artifacts** or a **v* tag Release**, unzip it into
-  `data/plugins/GIT-SYNC-PLUGIN/`.
+  `data/plugins/SGSP/`.
 - First run: fill in platform / repository / username / email / token in settings, then click [Start synchronization].
 - It is recommended to verify the sync direction with a test repository first.
 
@@ -170,5 +171,5 @@ Design details: [docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md).
 2. Conflict workflow design: [docs/CONFLICT-WORKFLOW.md](./docs/CONFLICT-WORKFLOW.md)
 3. Refactor notes: [docs/REFACTOR-NOTES.md](./docs/REFACTOR-NOTES.md)
 4. Official documents (external): [features](https://kdocs.cn/l/caGt3BWn9r5G?linkname=k7VAb4Wx5b), [usage](https://kdocs.cn/l/caGt3BWn9r5G?linkname=ArymAS7rZm), [disclaimer](https://kdocs.cn/l/caGt3BWn9r5G?linkname=hMZxlMSs8z)
-5. Feedback: [👥 SiYuan git sync plugin feedback group (QQ: 1015180920)](https://kdocs.cn/l/caGt3BWn9r5G?linkname=Ij7mC9wG6q)
+5. Feedback: [👥 SGSP feedback group (QQ: 1015180920)](https://kdocs.cn/l/caGt3BWn9r5G?linkname=Ij7mC9wG6q)
 6. FAQ: [FAQ document](https://kdocs.cn/l/cf8qSfWUdi1O)
