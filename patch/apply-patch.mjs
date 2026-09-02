@@ -75,7 +75,7 @@ const CSS_FILE = path.join(ROOT, "index.css"); // 插件包样式(就地追加)
 const PLUGIN_JSON = path.join(ROOT, "plugin.json"); // 插件包元数据(就地写版本)
 
 /** 默认版本号;可用环境变量 GIT_SYNC_VERSION 覆盖(CI 注入) */
-const DEFAULT_VERSION = "0.3.01";
+const DEFAULT_VERSION = "0.4.0";
 const VERSION = process.env.GIT_SYNC_VERSION || DEFAULT_VERSION;
 
 const MARKER = "__gSyncFlow"; // 已注入标记
@@ -100,6 +100,14 @@ const I18N_KEYS_ZH = {
     "冲突文档已生成在原文档旁(文件名含 _conflict_ 前缀),请在左侧文件树中打开查看",
   gSyncRuntimeLogsTitle: "SGSP 运行日志",
   gSyncHistoryError: "❌ 同步历史面板暂时无法打开,请稍后重试",
+  gSyncStartMsg: "🔄 开始同步...",
+  gSyncSuccessMsg: "✅ 同步成功",
+  gSyncPersistFailed: "⚠️ 状态保存失败,重启后可能丢失暂停状态",
+  gSyncHistorySaveFailed: "⚠️ 同步历史保存失败",
+  sgspSyncNotifyTitle: "成功时通知",
+  sgspSyncNotifyDesc: "每次同步成功时显示通知(默认开启,关闭后仅失败与冲突仍会通知)",
+  sgspAutoRetryTitle: "自动重试",
+  sgspAutoRetryDesc: "同步失败且可重试时自动重试(默认关闭,将在后续版本启用)",
 };
 
 const I18N_KEYS_EN = {
@@ -123,6 +131,14 @@ const I18N_KEYS_EN = {
     "The conflict doc was created next to the original (name contains _conflict_ prefix). Open it in the file tree.",
   gSyncRuntimeLogsTitle: "SGSP runtime logs",
   gSyncHistoryError: "❌ The sync history panel is unavailable. Please try again later.",
+  gSyncStartMsg: "🔄 Syncing...",
+  gSyncSuccessMsg: "✅ Sync succeeded",
+  gSyncPersistFailed: "⚠️ State save failed, paused state may be lost after restart",
+  gSyncHistorySaveFailed: "⚠️ Sync history save failed",
+  sgspSyncNotifyTitle: "Notify on success",
+  sgspSyncNotifyDesc: "Show a notification after each successful sync (default on; when off, failures and conflicts are still notified)",
+  sgspAutoRetryTitle: "Auto retry",
+  sgspAutoRetryDesc: "Automatically retry retryable sync failures (default off; will be enabled in a later version)",
 };
 
 const CSS_MARK = "git-sync-conflict-paused"; // 徽标样式是否已注入的标记
@@ -299,6 +315,17 @@ function patchIndex(js) {
     assertAnchor(js, anchor, "gitUtil 同步错误传播");
     js = js.replace(anchor, anchor.replace("rethrow:!1", "rethrow:!0"));
   }
+
+  /* ---------- 9. 设置面板新增开关(sgsp_sync_notify / sgsp_auto_retry) ---------- */
+  const settingsAnchor = 's.addItem({key:"aboutHint",value:"",type:"hint",direction:"row",title:this.i18n.hintTitle,description:this.i18n.hintDesc})';
+  const settingsCount = js.split(settingsAnchor).length - 1;
+  if (settingsCount !== 2) {
+    fail("设置面板 aboutHint 锚点数量异常: " + settingsCount + "(git/cloud 两个面板应各出现 1 次)");
+  }
+  const settingsItems =
+    's.addItem({key:"sgsp_sync_notify",value:!0,type:"checkbox",title:this.i18n.sgspSyncNotifyTitle,description:this.i18n.sgspSyncNotifyDesc}),' +
+    's.addItem({key:"sgsp_auto_retry",value:!1,type:"checkbox",title:this.i18n.sgspAutoRetryTitle,description:this.i18n.sgspAutoRetryDesc}),';
+  js = js.split(settingsAnchor).join(settingsItems + settingsAnchor);
 
   // 语法校验(写入前)
   const check = path.join(ROOT, "index.js");

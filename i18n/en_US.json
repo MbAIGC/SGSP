@@ -180,5 +180,13 @@
     "gSyncResolveFailedMsg": "❌ Resolution sync failed, conflict still pending",
     "gSyncOpenDocHint": "The conflict doc was created next to the original (name contains _conflict_ prefix). Open it in the file tree.",
     "gSyncRuntimeLogsTitle": "SGSP runtime logs",
-    "gSyncHistoryError": "❌ The sync history panel is unavailable. Please try again later."
+    "gSyncHistoryError": "❌ The sync history panel is unavailable. Please try again later.",
+    "gSyncStartMsg": "🔄 Syncing...",
+    "gSyncSuccessMsg": "✅ Sync succeeded",
+    "gSyncPersistFailed": "⚠️ State save failed, paused state may be lost after restart",
+    "gSyncHistorySaveFailed": "⚠️ Sync history save failed",
+    "sgspSyncNotifyTitle": "Notify on success",
+    "sgspSyncNotifyDesc": "Show a notification after each successful sync (default on; when off, failures and conflicts are still notified)",
+    "sgspAutoRetryTitle": "Auto retry",
+    "sgspAutoRetryDesc": "Automatically retry retryable sync failures (default off; will be enabled in a later version)"
 }

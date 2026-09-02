@@ -115,6 +115,34 @@ check("解决后状态 = resolved", host.state === "resolved");
 check("红色徽标已移除", !p.topBarElement.classList.classes.has("git-sync-conflict-paused"));
 check("发出恢复通知", msgs.some((m) => String(m.m).includes("冲突已处理")));
 
+// M1: 非冲突失败路径 → FAILED + 错误通知(带分类) + 历史 + 事件
+const errorEvents = [];
+host.events.on("sync:error", (e) => errorEvents.push(e));
+p.gitUtil.handleAutoRemoteAndLocalFileSync = async function () {
+  throw new Error("网络错误");
+};
+try {
+  await p.syncDataToCloud();
+  check("非冲突失败应重新抛出", false);
+} catch (e) {
+  check("非冲突失败重新抛出原错误", /网络错误/.test(e && e.message));
+}
+check("非冲突失败状态 = failed", host.state === "failed");
+check("失败通知已发出(含分类摘要)", msgs.some((m) => m.type === "error" && /同步失败: 网络错误/.test(String(m.m))));
+check("sync:error 事件已发出(分类 NETWORK)", errorEvents.length >= 1 && errorEvents[0].category === "NETWORK");
+const failEntry = host.history[host.history.length - 1];
+check("失败历史已记录(category=NETWORK)", failEntry && failEntry.state === "failed" && failEntry.category === "NETWORK");
+
+// M1: 成功路径 → SUCCESS + 成功通知(默认开) + 历史
+p.gitUtil.handleAutoRemoteAndLocalFileSync = async function () {
+  return {};
+};
+await p.syncDataToCloud();
+check("成功后状态 = success", host.state === "success");
+check("成功通知已发出", msgs.some((m) => String(m.m).includes("同步成功")));
+const okEntry = host.history[host.history.length - 1];
+check("成功历史已记录", okEntry && okEntry.state === "success");
+
 // 构建产物必须保留原同步入口的异常传播，否则状态机无法接管冲突。
 const builtSource = fs.readFileSync(BUNDLE, "utf8");
 check(

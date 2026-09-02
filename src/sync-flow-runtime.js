@@ -95,6 +95,115 @@ export const CONFLICT_CODE = 300;
 /** 持久化文件名(存放冲突暂停状态,重启后仍保持暂停) */
 export const DATA_FILE = "git-sync-flow.json";
 
+/** 同步历史持久化文件名(环形保留最近 N 次同步结果,重启后可查) */
+export const HISTORY_FILE = "git-sync-history.json";
+
+/** 同步历史最多保留条数 */
+export const HISTORY_LIMIT = 50;
+
+/** 错误分类的用户可见中文文案 */
+export const CATEGORY_LABEL = Object.freeze({
+  NETWORK: "网络连接失败",
+  AUTH: "Token 无效,请重新配置",
+  PERMISSION: "权限不足或 API 限流",
+  REPOSITORY: "仓库不存在,请检查设置",
+  BRANCH: "分支不存在,请检查设置",
+  CONFLICT: "文件冲突,已暂停",
+  PUSH_REJECTED: "远端已更新,重新同步",
+  BLOB_LIMIT: "文件过大,已跳过",
+  GIT_API: "Git API 错误",
+  UNKNOWN: "未知错误",
+});
+
+/**
+ * 错误分类器(M1 基础版): 沿 cause 链收集特征并归类。
+ * 只做展示/重试决策,不改变「非冲突错误重抛」的语义。
+ * @returns {{category:string,retryable:boolean,recoverable:boolean,status:number,path:string,message:string}}
+ */
+export function classifyError(err) {
+  let node = err;
+  let status = 0;
+  let path = "";
+  let message = "";
+  let conflict = false;
+  for (let i = 0; node && i < 7; i++) {
+    if (node.code === CONFLICT_CODE) conflict = true;
+    if (!status) {
+      const st = node.status || (node.response && node.response.status) || 0;
+      if (st) status = st;
+    }
+    if (!path && node.path) path = node.path;
+    if (!message && node.message) message = String(node.message);
+    node = node.cause;
+  }
+  const text = (message || "").toLowerCase();
+  const needUser = { retryable: false, recoverable: true };
+  if (conflict) {
+    return { category: "CONFLICT", retryable: false, recoverable: true, status: status, path: path, message: message };
+  }
+  if (status === 401) {
+    return { category: "AUTH", retryable: false, recoverable: true, status: status, path: path, message: message };
+  }
+  if (status === 403) {
+    return { category: "PERMISSION", retryable: false, recoverable: true, status: status, path: path, message: message };
+  }
+  if (status === 404) {
+    const cat = /branch|分支|ref/i.test(text) ? "BRANCH" : "REPOSITORY";
+    return { category: cat, retryable: false, recoverable: true, status: status, path: path, message: message };
+  }
+  if (status === 409 || status === 422) {
+    return { category: "PUSH_REJECTED", retryable: true, recoverable: false, status: status, path: path, message: message };
+  }
+  if (status === 413) {
+    return { category: "BLOB_LIMIT", retryable: false, recoverable: true, status: status, path: path, message: message };
+  }
+  if (status >= 400) {
+    return { category: "GIT_API", retryable: true, recoverable: false, status: status, path: path, message: message };
+  }
+  if (/(timeout|econn|enotfound|aborted|aborterror|socket|network|连接|网络|超时|dns)/i.test(text)) {
+    return { category: "NETWORK", retryable: true, recoverable: false, status: status, path: path, message: message };
+  }
+  if (/(limited|过大|超过|too large|exceed|file size)/i.test(text)) {
+    return { category: "BLOB_LIMIT", retryable: false, recoverable: true, status: status, path: path, message: message };
+  }
+  return { category: "UNKNOWN", retryable: true, recoverable: false, status: status, path: path, message: message };
+}
+
+/**
+ * 极简事件总线(on/off/emit),不引依赖,遵守注入语法约束。
+ * 用于同步层与通知层解耦: sync:start / sync:success / sync:error / sync:conflict / sync:paused / sync:resumed / sync:history
+ */
+export function createEventBus() {
+  const handlers = {};
+  return {
+    on: function (name, fn) {
+      if (!handlers[name]) handlers[name] = [];
+      handlers[name].push(fn);
+      return this;
+    },
+    off: function (name, fn) {
+      const list = handlers[name];
+      if (list) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (list[i] === fn) list.splice(i, 1);
+        }
+      }
+      return this;
+    },
+    emit: function (name, payload) {
+      const list = handlers[name] || [];
+      for (let i = 0; i < list.length; i++) {
+        try {
+          list[i](payload);
+        } catch (e) {
+          /* 订阅者异常不影响主流程 */
+        }
+      }
+      return this;
+    },
+  };
+}
+
 /** 从错误链(cause 链)中查找是否包含冲突错误(Mr 的 code===300) */
 export function isConflictError(err, depth) {
   let node = err;
@@ -107,23 +216,40 @@ export function isConflictError(err, depth) {
   return false;
 }
 
-/** 从错误链中提取冲突信息(路径/消息) */
+/**
+ * 从错误链中提取冲突信息(路径/消息)。
+ * M1 增强: 收集 cause 链中**所有** code===300 的节点,返回 conflicts 列表与数量;
+ * 同时保留旧字段 path/message/name(取第一个冲突),兼容既有调用与测试。
+ */
 export function extractConflictInfo(err) {
+  const conflicts = [];
   let node = err;
   for (let i = 0; node && i < 7; i++) {
     if (node.code === CONFLICT_CODE) {
-      return {
+      conflicts.push({
         path: node.path || "",
         message: node.message || "",
         name: node.name || "CONFLICT",
-      };
+      });
     }
     node = node.cause;
   }
+  if (conflicts.length === 0) {
+    return {
+      path: "",
+      message: String((err && err.message) || err),
+      name: "",
+      conflicts: [],
+      conflictCount: 0,
+    };
+  }
+  const first = conflicts[0];
   return {
-    path: "",
-    message: String((err && err.message) || err),
-    name: "",
+    path: first.path,
+    message: first.message,
+    name: first.name,
+    conflicts: conflicts,
+    conflictCount: conflicts.length,
   };
 }
 
@@ -135,36 +261,52 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * 错误摘要(M1 增强): 遍历**完整** cause 链,同时保留:
+ *  - 最外层 HTTP 状态(第一个出现的 status);
+ *  - 最具体文件路径(第一个出现的 path);
+ *  - 最底层消息(链末端节点的 response.data.message / message)。
+ * 不再「遇到第一个带 status 的节点就返回」,避免丢失更具体的底层信息。
+ */
 function getErrorSummary(err) {
   let node = err;
-  let first = null;
+  let status = 0;
+  let path = "";
+  let message = "";
+  let fallback = "";
   for (let i = 0; node && i < 7; i++) {
-    if (!first) first = node;
-    if (node.status || (node.response && node.response.status)) {
-      const response = node.response || {};
-      const data = response.data || {};
-      return {
-        message: String(data.message || node.message || first.message || node),
-        status: response.status || node.status || 0,
-        path: node.path || first.path || "",
-      };
+    if (!status) {
+      const st = node.status || (node.response && node.response.status) || 0;
+      if (st) status = st;
     }
+    if (!path && node.path) path = node.path;
+    const data = (node.response && node.response.data) || {};
+    const m = data.message || node.message || "";
+    if (m) message = String(m);
+    if (!fallback && node.message) fallback = String(node.message);
     node = node.cause;
   }
   return {
-    message: String((first && first.message) || err || "未知错误"),
-    status: 0,
-    path: (first && first.path) || "",
+    message: message || fallback || String((err && err.message) || err || "未知错误"),
+    status: status || 0,
+    path: path || "",
   };
+}
+
+/** 脱敏: 隐藏 token / 密码 / Authorization 头等敏感信息 */
+function redactText(text) {
+  return String(text == null ? "" : text)
+    .replace(/Bearer\s+[^\s]+/gi, "Bearer [已隐藏]")
+    .replace(/(token|password|authorization|cookie)\s*[:=]\s*[^,;\s]+/gi, "$1=[已隐藏]");
 }
 
 function formatErrorSummary(err) {
   const summary = getErrorSummary(err);
-  let message = summary.message.replace(/Bearer\\s+[^\\s]+/gi, "Bearer [已隐藏]");
-  message = message.replace(/(token|password|authorization|cookie)\\s*[:=]\\s*[^,;\\s]+/gi, "$1=[已隐藏]");
-  if (summary.status) message = "HTTP " + summary.status + ": " + message;
-  if (summary.path) message += " (文件: " + summary.path + ")";
-  return message.slice(0, 500);
+  const message = redactText(summary.message);
+  let output = message;
+  if (summary.status) output = "HTTP " + summary.status + ": " + output;
+  if (summary.path) output += " (文件: " + summary.path + ")";
+  return output.slice(0, 500);
 }
 
 /**
@@ -190,6 +332,11 @@ export function createSyncFlowHost(plugin, q) {
     dialog: null,
     restorePromise: null,
     logEntries: [],
+    // M1: 同步历史(环形,重启后可查)与事件总线
+    history: [],
+    operationSeq: 0,
+    currentOperationId: "",
+    events: createEventBus(),
   };
 
   function i18n(key, fallback) {
@@ -210,6 +357,57 @@ export function createSyncFlowHost(plugin, q) {
     host.logEntries.push(entry);
     if (host.logEntries.length > 200) host.logEntries.shift();
     return entry;
+  }
+
+  /** 生成一次同步的 operationId(贯通通知/历史/日志) */
+  function nextOperationId() {
+    host.operationSeq += 1;
+    return "sync-" + Date.now() + "-" + host.operationSeq;
+  }
+
+  /** 发送同步事件(订阅者异常不影响主流程) */
+  function emitSync(name, payload) {
+    try {
+      host.events.emit(name, payload);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  /** 读取「成功时通知」开关(默认开) */
+  function isSyncNotifyEnabled() {
+    try {
+      const v = plugin && plugin.settingUtils ? plugin.settingUtils.get("sgsp_sync_notify") : undefined;
+      return v === undefined || v === null || v === "" ? true : !!v;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /** 记录一条同步历史并持久化(环形保留,失败可观测) */
+  function addHistoryEntry(entry) {
+    const item = {
+      operationId: entry.operationId || host.currentOperationId || "",
+      time: new Date().toISOString(),
+      state: entry.state || host.state || "",
+      category: entry.category || "",
+      message: String(entry.message == null ? "" : entry.message).slice(0, 300),
+      fileCount: entry.fileCount || 0,
+      retries: entry.retries || 0,
+    };
+    host.history.push(item);
+    if (host.history.length > HISTORY_LIMIT) host.history.shift();
+    emitSync("sync:history", item);
+    try {
+      plugin
+        .saveData(HISTORY_FILE, { entries: host.history })
+        .catch(function (err) {
+          addLog("error", "同步历史保存失败: " + ((err && err.message) || err));
+          notify(i18n("gSyncHistorySaveFailed", "⚠️ 同步历史保存失败"), "error");
+        });
+    } catch (e) {
+      addLog("error", "同步历史保存失败: " + ((e && e.message) || e));
+    }
   }
 
   function notify(msg, type) {
@@ -265,34 +463,81 @@ export function createSyncFlowHost(plugin, q) {
   function persist() {
     try {
       if (host.state === SyncState.CONFLICT_PAUSED) {
-        plugin.saveData(DATA_FILE, {
-          state: host.state,
-          conflictDetail: host.conflictDetail || null,
-          pausedSince: host.pausedSince,
-          pausedTimer: host.pausedTimer,
-        }).catch(function () {});
+        const cd = host.conflictDetail || {};
+        plugin
+          .saveData(DATA_FILE, {
+            state: host.state,
+            conflictDetail: {
+              path: cd.path || "",
+              message: cd.message || "",
+              name: cd.name || "",
+              conflicts: cd.conflicts || [],
+              conflictCount: cd.conflictCount || (cd.conflicts ? cd.conflicts.length : 0),
+            },
+            pausedSince: host.pausedSince,
+            pausedTimer: host.pausedTimer,
+          })
+          .catch(function (err) {
+            // M1: 持久化失败不再静默吞掉,保持内存态暂停并提示
+            addLog("error", "冲突状态持久化失败: " + ((err && err.message) || err));
+            notify(i18n("gSyncPersistFailed", "⚠️ 冲突状态保存失败,重启后可能丢失暂停状态"), "error");
+          });
       } else {
-        plugin.saveData(DATA_FILE, { state: SyncState.IDLE }).catch(function () {});
+        plugin
+          .saveData(DATA_FILE, { state: SyncState.IDLE })
+          .catch(function (err) {
+            // M1: 持久化失败可观测(不静默)
+            addLog("error", "状态持久化失败: " + ((err && err.message) || err));
+            notify(i18n("gSyncPersistFailed", "⚠️ 状态保存失败,重启后可能丢失暂停状态"), "error");
+          });
       }
     } catch (e) {
-      /* 持久化失败不影响主流程(冲突暂停会自动重新建立) */
+      // 持久化失败不影响主流程(冲突暂停会自动重新建立),但需可观测
+      addLog("error", "持久化异常: " + ((e && e.message) || e));
     }
   }
 
-  /** onload 时调用: 恢复上次未解决的冲突暂停状态 */
+  /** onload 时调用: 恢复上次未解决的冲突暂停状态 + 同步历史 */
   function onAfterLoad() {
     try {
       host.restorePromise = Promise.resolve(plugin.loadData(DATA_FILE));
     } catch (e) {
       host.restorePromise = Promise.reject(e);
     }
+    // M1: 恢复同步历史(失败仅记日志,不影响冲突恢复)
+    try {
+      Promise.resolve(plugin.loadData(HISTORY_FILE))
+        .then(function (data) {
+          if (data && Array.isArray(data.entries)) {
+            host.history = data.entries.slice(0, HISTORY_LIMIT);
+          }
+        })
+        .catch(function (err) {
+          addLog("error", "同步历史恢复失败: " + ((err && err.message) || err));
+        });
+    } catch (e) {
+      addLog("error", "同步历史恢复失败: " + ((e && e.message) || e));
+    }
     return host.restorePromise
       .then(function (data) {
         if (data && data.state === SyncState.CONFLICT_PAUSED) {
+          const raw = data.conflictDetail || {};
+          // 旧版本持久化只有单文件字段,迁移为 conflicts 数组
+          let conflicts = Array.isArray(raw.conflicts) && raw.conflicts.length
+            ? raw.conflicts
+            : raw.path || raw.message
+              ? [{ path: raw.path || "", message: raw.message || "", name: raw.name || "CONFLICT" }]
+              : [];
+          host.conflictDetail = {
+            path: conflicts.length ? conflicts[0].path : "",
+            message: conflicts.length ? conflicts[0].message : "",
+            name: conflicts.length ? conflicts[0].name : "",
+            conflicts: conflicts,
+            conflictCount: conflicts.length,
+          };
           host.state = SyncState.CONFLICT_PAUSED;
-          host.conflictDetail = data.conflictDetail || null;
           host.pausedSince = data.pausedSince || Date.now();
-          // 旧状态文件没有 pausedTimer 时，按自动模式兼容恢复定时器。
+          // 旧状态文件没有 pausedTimer 时,按自动模式兼容恢复定时器。
           host.pausedTimer = data.pausedTimer !== false;
           host.autoSkipNotified = false;
           setBadge();
@@ -433,11 +678,28 @@ export function createSyncFlowHost(plugin, q) {
   /** 弹出冲突处理对话框(持久,直到用户选择) */
   function showConflictDialog() {
     const conflict = host.conflictDetail || {};
-    const pathText = conflict.path || "";
+    const conflicts = Array.isArray(conflict.conflicts) ? conflict.conflicts : [];
+    const pathText = conflicts.length ? conflicts[0].path || "" : conflict.path || "";
+    // M1: 多冲突时展示数量与文件列表(最多列出前 10 个)
+    let listHtml = "";
+    if (conflicts.length > 1) {
+      const shown = conflicts.slice(0, 10);
+      listHtml =
+        '<div style="max-height:140px;overflow:auto;border-top:1px solid var(--b3-theme-background-light);margin-top:8px;padding-top:6px">' +
+        shown
+          .map(function (c) {
+            return '<div style="word-break:break-all;font-size:12px;padding:2px 0">• ' + escapeHtml(c.path || "") + "</div>";
+          })
+          .join("") +
+        (conflicts.length > 10 ? '<div style="font-size:12px;opacity:.6">…等 ' + conflicts.length + " 个文件</div>" : "") +
+        "</div>";
+    }
     try {
       closeDialog();
       const dialogInstance = new q.Dialog({
-        title: i18n("gSyncConflictTitle", "⚠️ 检测到同步冲突"),
+        title:
+          i18n("gSyncConflictTitle", "⚠️ 检测到同步冲突") +
+          (conflicts.length > 1 ? "(" + conflicts.length + " 个文件)" : ""),
         content:
           '<div class="b3-dialog__content">' +
           '<div class="b3-label__text" style="margin-bottom:8px">' +
@@ -453,6 +715,7 @@ export function createSyncFlowHost(plugin, q) {
           '<code style="word-break:break-all">' +
           escapeHtml(pathText) +
           "</code>" +
+          listHtml +
           "</div>" +
           '<div class="fn__flex" style="gap:8px;flex-wrap:wrap">' +
           '<button class="b3-button b3-button--text" id="gSyncKeepLocal" style="flex:1;min-width:40%">' +
@@ -543,7 +806,19 @@ export function createSyncFlowHost(plugin, q) {
     host.autoSkipNotified = false;
     setBadge();
     persist();
-    notify(i18n("gSyncConflictMsg", "🔴 检测到同步冲突,自动同步已暂停"), "error");
+    // M1: 冲突事件 + 历史记录 + 数量通知
+    emitSync("sync:conflict", { conflictDetail: info, conflictCount: info.conflictCount });
+    addHistoryEntry({
+      state: SyncState.CONFLICT_PAUSED,
+      category: "CONFLICT",
+      message: info.message || i18n("gSyncConflictMsg", "检测到同步冲突"),
+      fileCount: info.conflictCount,
+    });
+    notify(
+      i18n("gSyncConflictMsg", "🔴 检测到同步冲突,自动同步已暂停") +
+        (info.conflictCount > 1 ? "(" + info.conflictCount + " 个文件)" : ""),
+      "error"
+    );
     showConflictDialog();
     return undefined;
   }
@@ -552,6 +827,7 @@ export function createSyncFlowHost(plugin, q) {
    * 同步入口包装(替换原 syncDataToCloud):
    *  - 冲突暂停状态下: 拦截自动同步/普通手动触发,放行用户的明确解决动作
    *  - 正常: 原逻辑 + 同步状态机 + 冲突接管
+   *  - M1: 开始/成功/失败即时通知 + 事件总线 + 同步历史
    */
   async function runSync(t, s) {
     const prevState = host.state;
@@ -565,6 +841,8 @@ export function createSyncFlowHost(plugin, q) {
         host.wasConflictFlow = true;
         host.state = SyncState.RESOLVING;
         setBadge();
+        host.currentOperationId = nextOperationId();
+        emitSync("sync:start", { operationId: host.currentOperationId, phase: "resolve" });
       } else {
         const autoTick = consumeAutoTick();
         if (!autoTick) {
@@ -584,8 +862,18 @@ export function createSyncFlowHost(plugin, q) {
         return undefined;
       }
     } else {
+      // M1: 非暂停路径读取并消费 autoTick 标记(定时触发只记日志不 toast,避免轰炸)
+      const wasAutoTick = host.autoTick;
+      host.autoTick = false;
       host.state = SyncState.RUNNING;
       setBadge();
+      host.currentOperationId = nextOperationId();
+      const startMsg = i18n("gSyncStartMsg", "🔄 开始同步...");
+      addLog("info", startMsg);
+      emitSync("sync:start", { operationId: host.currentOperationId });
+      if (!wasAutoTick) {
+        notify(startMsg, "info");
+      }
     }
 
     try {
@@ -601,6 +889,13 @@ export function createSyncFlowHost(plugin, q) {
         setBadge();
         persist();
         resumeAutoSync();
+        addHistoryEntry({
+          state: SyncState.RESOLVED,
+          category: "",
+          message: i18n("gSyncResolvedMsg", "✅ 冲突已处理,自动同步已恢复"),
+        });
+        emitSync("sync:success", { operationId: host.currentOperationId });
+        emitSync("sync:resumed", { operationId: host.currentOperationId });
         notify(
           i18n("gSyncResolvedMsg", "✅ 冲突已处理,自动同步已恢复"),
           "info"
@@ -610,6 +905,17 @@ export function createSyncFlowHost(plugin, q) {
 
       host.state = SyncState.SUCCESS;
       setBadge();
+      const successMsg = i18n("gSyncSuccessMsg", "✅ 同步成功");
+      addLog("info", successMsg);
+      addHistoryEntry({
+        state: SyncState.SUCCESS,
+        category: "",
+        message: successMsg,
+      });
+      emitSync("sync:success", { operationId: host.currentOperationId });
+      if (isSyncNotifyEnabled()) {
+        notify(successMsg, "info");
+      }
       return result;
     } catch (err) {
       if (isConflictError(err)) {
@@ -622,16 +928,30 @@ export function createSyncFlowHost(plugin, q) {
         plugin.i18n &&
         typeof err.message === "string" &&
         err.message === plugin.i18n.isSyncingInfo;
+      const classified = classifyError(err);
+      const label = CATEGORY_LABEL[classified.category] || CATEGORY_LABEL.UNKNOWN;
       if (host.wasConflictFlow) {
         // 解决冲突的同步失败 → 回到暂停态,等待用户重试
         host.wasConflictFlow = false;
         host.state = SyncState.CONFLICT_PAUSED;
         setBadge();
+        addHistoryEntry({
+          state: SyncState.CONFLICT_PAUSED,
+          category: classified.category,
+          message: formatErrorSummary(err),
+        });
+        emitSync("sync:error", {
+          operationId: host.currentOperationId,
+          category: classified.category,
+          retryable: classified.retryable,
+          recoverable: classified.recoverable,
+          message: formatErrorSummary(err),
+        });
         notify(
           i18n(
             "gSyncResolveFailedMsg",
             "❌ 处理冲突的同步失败,冲突仍待处理"
-          ),
+          ) + "(" + label + ")",
           "error"
         );
         showConflictDialog();
@@ -639,8 +959,20 @@ export function createSyncFlowHost(plugin, q) {
         host.state = SyncState.FAILED;
         setBadge();
         const message = formatErrorSummary(err);
-        addLog("error", "同步失败: " + message);
-        notify("❌ 同步失败: " + message, "error");
+        addLog("error", "同步失败: " + message + " [" + classified.category + "]");
+        addHistoryEntry({
+          state: SyncState.FAILED,
+          category: classified.category,
+          message: message,
+        });
+        emitSync("sync:error", {
+          operationId: host.currentOperationId,
+          category: classified.category,
+          retryable: classified.retryable,
+          recoverable: classified.recoverable,
+          message: message,
+        });
+        notify("❌ 同步失败: " + message + "(" + label + ")", "error");
       } else {
         // 「正在同步中」的良性保护错误: 恢复进入前的状态
         host.state = prevState;
@@ -671,6 +1003,13 @@ export function createSyncFlowHost(plugin, q) {
   host.resolveKeepRemote = resolveKeepRemote;
   host.handleConflict = handleConflict;
   host.runSync = runSync;
+  // M1: 事件总线 / 历史 / 通知开关
+  host.events = host.events || createEventBus();
+  host.emitSync = emitSync;
+  host.addHistoryEntry = addHistoryEntry;
+  host.isSyncNotifyEnabled = isSyncNotifyEnabled;
+  host.classifyError = classifyError;
+  host.getErrorSummary = getErrorSummary;
 
   // 把宿主句柄挂到插件实例上(便于调试/测试访问,不影响插件行为)
   try {

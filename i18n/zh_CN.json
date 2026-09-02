@@ -180,5 +180,13 @@
     "gSyncResolveFailedMsg": "❌ 处理冲突的同步失败,冲突仍待处理",
     "gSyncOpenDocHint": "冲突文档已生成在原文档旁(文件名含 _conflict_ 前缀),请在左侧文件树中打开查看",
     "gSyncRuntimeLogsTitle": "SGSP 运行日志",
-    "gSyncHistoryError": "❌ 同步历史面板暂时无法打开,请稍后重试"
+    "gSyncHistoryError": "❌ 同步历史面板暂时无法打开,请稍后重试",
+    "gSyncStartMsg": "🔄 开始同步...",
+    "gSyncSuccessMsg": "✅ 同步成功",
+    "gSyncPersistFailed": "⚠️ 状态保存失败,重启后可能丢失暂停状态",
+    "gSyncHistorySaveFailed": "⚠️ 同步历史保存失败",
+    "sgspSyncNotifyTitle": "成功时通知",
+    "sgspSyncNotifyDesc": "每次同步成功时显示通知(默认开启,关闭后仅失败与冲突仍会通知)",
+    "sgspAutoRetryTitle": "自动重试",
+    "sgspAutoRetryDesc": "同步失败且可重试时自动重试(默认关闭,将在后续版本启用)"
 }
