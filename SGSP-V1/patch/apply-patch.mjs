@@ -324,6 +324,116 @@ function patchIndex(js) {
     'try{__gSyncFlow&&__gSyncFlow.trackFile(i,s&&s.path?s.path:"")}catch(e){}';
   js = js.split(trackAnchor).join(trackAnchor + trackInject);
 
+  /* ---------- 7.2 P0 数据完整性: readFileBlob markdown 导出空内容防护 ---------- */
+  // markdown 模式下内容来自 /api/export/exportMdContent,导出失败(返回 null)
+  // 或内容为空时,不得静默生成 0 字节 Blob(会造成远端 .sy/.md 为空)。
+  // 改为抛出 Fe(GIT_BLOB) → 整次同步失败、不创建空 Blob。
+  const mdAnchor = 'n=await nl(o);const a=/^---\\s*\\n([\\s\\S]*?)\\n---\\s*/;n.content=n.content.replace(a,""),s=new Blob([n.content])}else s=await Ms(e)';
+  assertAnchor(js, mdAnchor, "readFileBlob markdown 导出");
+  const mdInject =
+    'n=await nl(o);if(!n||!n.content||String(n.content).length===0){try{__gSyncFlow&&__gSyncFlow.addLog("error","数据完整性异常: 导出 Markdown 内容为空,已停止同步 -> "+e)}catch(_e){}throw new Fe(ne.GIT_BLOB,e,"数据完整性异常: 导出 Markdown 内容为空,已停止同步")}const a=/^---\\s*\\n([\\s\\S]*?)\\n---\\s*/;n.content=n.content.replace(a,""),s=new Blob([n.content])}else s=await Ms(e)';
+  js = js.replace(mdAnchor, mdInject);
+
+  /* ---------- 7.3 P0 数据安全: al() 目录枚举异常标记 ---------- */
+  // al() 的 catch 目前返回 {isExist:!1},会把「读目录失败」当成「文件不存在」,
+  // 进而可能生成远端删除。注入枚举异常标记,删除安全判定据此拒绝删除。
+  const alAnchor = '}catch(e){return S.error(`Workspace content read error-existsFileOrDir: ${e}`),{isExist:!1}}}';
+  assertAnchor(js, alAnchor, "al() catch");
+  const alInject =
+    '}catch(e){try{__gSyncFlow&&__gSyncFlow.noteEnumError(r)}catch(_e){}return S.error(`Workspace content read error-existsFileOrDir: ${e}`),{isExist:!1}}}';
+  js = js.replace(alAnchor, alInject);
+
+  /* ---------- 7.4 P0 数据安全: addFileToWorkArea 删除安全判定 + 空内容防护 ---------- */
+  // 删除操作统一在这里拦截:「本地不存在 ≠ 本地删除」。
+  // 只有本地文件清单中存在该路径(证明本地曾经拥有)且属于当前同步范围,
+  // 且本次同步没有发生目录枚举异常时,才允许生成远端删除。
+  // vendor 中该函数有两个实现(第一版 i=="delete" 直接入 workTrees;
+  // 第二版 i=="delete"||i=="update" 走内容上传路径),分别拦截。
+  const del1Anchor = '}if(S.info("addFileToWorkArea:",t.size,s,"operate:",i),i=="delete"){';
+  const del1Count = js.split(del1Anchor).length - 1;
+  if (del1Count !== 1) fail("addFileToWorkArea 版本1 删除分支锚点数量异常: " + del1Count);
+  const del1Inject =
+    '}if(S.info("addFileToWorkArea:",t.size,s,"operate:",i),i=="delete"){try{const __p0a=s&&s.path?s.path:"";if(__gSyncFlow){const __g=__gSyncFlow.guardLocalDelete(__p0a);if(!__g.allow){__gSyncFlow.addLog("warn","⚠️ 跳过远端删除(无法确认本地删除): "+__p0a+" ("+__g.reason+")");return t}}}catch(_e){}';
+  js = js.split(del1Anchor).join(del1Inject);
+
+  const del2Anchor = '}else if(i=="delete"||i=="update"){let o=s.size;';
+  const del2Count = js.split(del2Anchor).length - 1;
+  if (del2Count !== 1) fail("addFileToWorkArea 版本2 删除分支锚点数量异常: " + del2Count);
+  const del2Inject =
+    '}else if(i=="delete"||i=="update"){try{const __p0b=s&&s.path?s.path:"";if(i=="delete"&&__gSyncFlow){const __g2=__gSyncFlow.guardLocalDelete(__p0b);if(!__g2.allow){__gSyncFlow.addLog("warn","⚠️ 跳过远端删除(无法确认本地删除): "+__p0b+" ("+__g2.reason+")");return t}}}catch(_e){}let o=s.size;';
+  js = js.split(del2Anchor).join(del2Inject);
+
+  // create/update: 上传前内容完整性防护(源文件非空时禁止生成空 Blob)
+  // 两个实现的 size 上限常量不同(xi=41943040 / La),分别注入。
+  const up1Anchor = 'if(o>=xi)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${xi}MB`);';
+  const up1Count = js.split(up1Anchor).length - 1;
+  if (up1Count !== 1) fail("addFileToWorkArea 版本1 大小校验锚点数量异常: " + up1Count);
+  const up1Inject =
+    'try{if(__gSyncFlow&&!__gSyncFlow.contentIntegrityCheck(s.path,s.size,s.content))throw new Fe(ne.GIT_BLOB,s.path,__gSyncFlow?__gSyncFlow.integrityErrorMessage(s.path,"上传内容校验"):"数据完整性异常: 上传内容校验失败")}catch(_e){if(_e&&_e.__sgspIntegrity)throw _e}if(o>=xi)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${xi}MB`);';
+  js = js.split(up1Anchor).join(up1Inject);
+
+  const up2Anchor = 'if(o>=La)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${xi}MB`);';
+  const up2Count = js.split(up2Anchor).length - 1;
+  if (up2Count !== 1) fail("addFileToWorkArea 版本2 大小校验锚点数量异常: " + up2Count);
+  const up2Inject =
+    'try{if(__gSyncFlow&&!__gSyncFlow.contentIntegrityCheck(s.path,s.size,s.content))throw new Fe(ne.GIT_BLOB,s.path,__gSyncFlow?__gSyncFlow.integrityErrorMessage(s.path,"上传内容校验"):"数据完整性异常: 上传内容校验失败")}catch(_e){if(_e&&_e.__sgspIntegrity)throw _e}if(o>=La)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${xi}MB`);';
+  js = js.split(up2Anchor).join(up2Inject);
+
+  /* ---------- 7.5 P0 数据安全: 主流程 BASE-tree 构建 p 时过滤同步范围外文件 ---------- */
+  // BASE tree 来自上次同步的 commit,若当前同步范围已缩小,范围外的文件
+  // 会被 !K.includes(L.path) 当成「本地删除」→ 生成远端删除。这里先过滤:
+  // 不在当前同步范围的文件一律不进 workArea(不删除、不上传)。
+  const pBuildAnchor = 'if(!K.includes(L.path)){let oe=Q.basename(L.path),V={sha:L.sha,mode:"100644",type:L.type,name:oe,path:L.path,status:Rt,updated:new Date(new Date(_.date).getTime()+Es)};p.push(V)}';
+  assertAnchor(js, pBuildAnchor, "主流程 BASE-tree p 构建");
+  const pBuildInject =
+    'if(!K.includes(L.path)){let __p0skip=!1;try{__p0skip=!!(__gSyncFlow&&!__gSyncFlow.inSyncScope(L.path))}catch(_e){}if(__p0skip){try{__gSyncFlow&&__gSyncFlow.addLog("warn","跳过同步范围外文件(不删除): "+L.path)}catch(_e){}}else{let oe=Q.basename(L.path),V={sha:L.sha,mode:"100644",type:L.type,name:oe,path:L.path,status:Rt,updated:new Date(new Date(_.date).getTime()+Es)};p.push(V)}}';
+  js = js.replace(pBuildAnchor, pBuildInject);
+
+  // handleLocalCoverRemote 的 R 构建同样过滤
+  const rBuildAnchor = 'if(!O.includes(I.path)){let te=Q.basename(I.path),C={sha:I.sha,mode:"100644",type:I.type,name:te,path:I.path,status:Rt,updated:new Date(new Date(h.date).getTime()+Es)};R.push(C)}';
+  assertAnchor(js, rBuildAnchor, "handleLocalCoverRemote R 构建");
+  const rBuildInject =
+    'if(!O.includes(I.path)){let __p0skip2=!1;try{__p0skip2=!!(__gSyncFlow&&!__gSyncFlow.inSyncScope(I.path))}catch(_e){}if(__p0skip2){try{__gSyncFlow&&__gSyncFlow.addLog("warn","跳过同步范围外文件(不删除): "+I.path)}catch(_e){}}else{let te=Q.basename(I.path),C={sha:I.sha,mode:"100644",type:I.type,name:te,path:I.path,status:Rt,updated:new Date(new Date(h.date).getTime()+Es)};R.push(C)}}';
+  js = js.replace(rBuildAnchor, rBuildInject);
+
+  /* ---------- 7.6 P0: 每次成功同步后保存本地文件清单 ---------- */
+  // 本地清单 = 同步完成后当前同步范围内本地确实存在的文件路径集合。
+  // 它是删除安全判定的证据: 只有清单中存在某路径,才证明「本地曾经拥有」。
+  // 三个同步入口(自动/远端覆盖本地/本地覆盖远端)成功后都会重建清单。
+  const mkManifestSave = (okVar) =>
+    "if(" +
+    okVar +
+    ".successed)this.settingUtils.setAndSave(De," +
+    okVar +
+    '.sha),this.settingUtils.setAndSave(rt,new Date().toLocaleString()),(async()=>{try{const __p0roots=await Ir(Number(this.settingUtils.get(Pe)),"/*"),__p0files=await this.handleWorkSpaceModifyFileList(__p0roots,!1,"/*");__gSyncFlow&&__gSyncFlow.saveLocalManifest((__p0files||[]).map(z=>z&&z.path?z.path:""))}catch(_e){try{__gSyncFlow&&__gSyncFlow.addLog("error","本地文件清单保存失败: "+((_e&&_e.message)||_e))}catch(_e2){}}})().catch(function(){})';
+  const successAnchors = [
+    ['handleRemoteCoverLocal', 'O', 'if(O.successed)this.settingUtils.setAndSave(De,O.sha)'],
+    ['handleLocalCoverRemote', 'x', 'if(x.successed)this.settingUtils.setAndSave(De,x.sha)'],
+    ['handleAutoRemoteAndLocalFileSync', 'Z', 'if(S.info("commitResponse:",Z),Z.successed)this.settingUtils.setAndSave(De,Z.sha)'],
+  ];
+  for (const [label, okVar, anchor] of successAnchors) {
+    assertAnchor(js, anchor, label + " 成功分支");
+    js = js.replace(anchor, mkManifestSave(okVar));
+  }
+
+  /* ---------- 7.7 P0 数据完整性: 远端下载写入前空内容防护 ---------- */
+  // 远端 blob 为 0 字节但本地已存在该文件时,禁止空内容覆盖本地已有内容。
+  // 触发时抛出 Fe(GIT_BLOB) → 整次同步失败、保留本地文件。
+  // 注入点: 3 处「远端下载 → 写本地」的 ue(...) 调用。
+  const dlAnchor = 'let w=await this.getRepoFileContent(h,n.sha);await ue(';
+  const dlCount = js.split(dlAnchor).length - 1;
+  if (dlCount !== 4) fail("远端下载写入锚点数量异常: " + dlCount + "(应为 4)");
+  const dlInject =
+    'let w=await this.getRepoFileContent(h,n.sha);try{let __p0dst=!(w&&w.content&&w.content.length===0);if(!__p0dst&&__gSyncFlow&&await __gSyncFlow.localFileExists(h)){__p0dst=!1;throw new Fe(ne.GIT_BLOB,h,"数据完整性异常: 远端内容为空,拒绝覆盖本地文件")}}catch(_e){if(_e&&_e.code===ne.GIT_BLOB)throw _e}await ue(';
+  js = js.split(dlAnchor).join(dlInject);
+  // handlerLocalModifyDataSync 的 y.content 下载分支(新增/下载而非覆盖)
+  const dlYAnchor = 'await ue(h,!1,new Blob([y.content]),de,u,"create")';
+  const dlYCount = js.split(dlYAnchor).length - 1;
+  if (dlYCount < 1) fail("y.content 下载写入锚点缺失");
+  const dlYInject =
+    'try{let __p0dst2=!(y&&y.content&&y.content.length===0);if(!__p0dst2&&__gSyncFlow&&await __gSyncFlow.localFileExists(h)){__p0dst2=!1;throw new Fe(ne.GIT_BLOB,h,"数据完整性异常: 远端内容为空,拒绝覆盖本地文件")}}catch(_e){if(_e&&_e.code===ne.GIT_BLOB)throw _e}await ue(h,!1,new Blob([y.content]),de,u,"create")';
+  js = js.split(dlYAnchor).join(dlYInject);
+
   /* ---------- 8. gitUtil 错误向状态机传播 ---------- */
   const anchorsGitUtil = [
     'He([we({rethrow:!1})],xe.prototype,"handleRemoteCoverLocal")',

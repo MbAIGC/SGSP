@@ -1,8 +1,8 @@
 {
-  "name": "SGSP",
+  "name": "SY-GSP",
   "author": "MbAIGC",
   "url": "https://github.com/MbAIGC/SGSP",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "minAppVersion": "3.0.12",
   "backends": [
     "windows",
@@ -21,12 +21,12 @@
     "desktop-window"
   ],
   "displayName": {
-    "en_US": "SGSP",
-    "zh_CN": "SGSP"
+    "en_US": "SY-GSP",
+    "zh_CN": "SY-GSP"
   },
   "description": {
-    "en_US": "Git Sync Plugin is a tool for syncing local note files to GitHub and Gitee repositories. By integrating GitHub and Gitee apis, users can easily push note files to remote repositories, enabling multi-device synchronization and version control.",
-    "zh_CN": "Git Sync Plugin 是一款用于将本地笔记文件同步到 GitHub 和 Gitee 仓库的工具。通过集成 GitHub 和 Gitee 的 API，用户可以轻松地将笔记文件推送到远程仓库，实现多设备同步和版本控制。"
+    "en_US": "SY-GSP is a SiYuan plugin that syncs notes with GitHub and Gitee repositories, built on the readable Sync Engine 2.0 (three-way merge, conflict center, confirmed-base tracking).",
+    "zh_CN": "SY-GSP 是一款思源笔记 GitHub/Gitee 同步插件，基于可读源码的同步引擎 2.0 构建：三方合并、冲突中心、确认基准跟踪。"
   },
   "readme": {
     "en_US": "README_en_US.md",
@@ -39,9 +39,9 @@
   },
   "keywords": [
     "git",
-    "GIT",
-    "同步",
     "sync",
-    "SYNC"
+    "github",
+    "gitee",
+    "同步"
   ]
 }

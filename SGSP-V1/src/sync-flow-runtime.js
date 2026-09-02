@@ -72,6 +72,9 @@ export const SETTING = Object.freeze({
   syncInterval: "sync_interval", // je: 自动同步间隔(毫秒)
   syncStrategy: "sync_strategy", // lt: 0=自动 1=选择方向 2=远端覆盖本地 3=本地覆盖远端
   enabledSync: "enabled_sync", // Me
+  syncRange: "sync_range", // Pe: 0=工作空间 1=data 目录 2=笔记文档
+  syncFileType: "sync_file_type", // ut: 0=raw 1=markdown
+  lastCommitSha: "latest_commit_sha", // De
 });
 
 /** sync_strategy 取值 */
@@ -94,6 +97,9 @@ export const CONFLICT_CODE = 300;
 
 /** 持久化文件名(存放冲突暂停状态,重启后仍保持暂停) */
 export const DATA_FILE = "git-sync-flow.json";
+
+/** 本地文件清单持久化文件名(P0 修复: 删除安全判定的「本地曾拥有」证据) */
+export const MANIFEST_FILE = "git-sync-local-manifest.json";
 
 /** 同步历史持久化文件名(环形保留最近 N 次同步结果,重启后可查) */
 export const HISTORY_FILE = "git-sync-history.json";
@@ -437,6 +443,211 @@ export function createSyncFlowHost(plugin, q) {
       : "";
   }
 
+  /**
+   * P0: 本次同步是否发生过「本地目录枚举异常」。
+   * vendor 的 al() 在 catch 分支返回 {isExist:!1},会把枚举失败当成
+   * 「文件不存在」→ 进而可能生成远端删除。这里记录标记,删除安全判定
+   * 一旦发现枚举异常就拒绝删除(宁可跳过,不可误删)。
+   */
+  let enumErrorOccurred = false;
+
+  function noteEnumError(path) {
+    enumErrorOccurred = true;
+    addLog("error", "⚠️ 本地目录枚举异常,已进入安全模式: " + String(path == null ? "" : path));
+  }
+
+  function resetEnumError() {
+    enumErrorOccurred = false;
+  }
+
+  /**
+   * P0: 本地文件清单(上次成功同步后本地确实存在的文件路径集合)。
+   * 这是「本地删除」判定的证据: 只有清单中存在该路径,才能证明
+   * 「本地曾经拥有该文件」;清单缺失(新设备/首次同步/从未下载)时,
+   * 本地不存在 ≠ 本地删除,禁止生成远端删除。
+   */
+  let localManifest = null; // null=未加载; {paths: {path:true}} 或 {paths: []}
+
+  function getManifestPaths() {
+    if (!localManifest || !localManifest.paths) return {};
+    return localManifest.paths;
+  }
+
+  /** 加载本地文件清单(onload 时调用,失败仅记日志) */
+  function loadLocalManifest() {
+    try {
+      return Promise.resolve(plugin.loadData(MANIFEST_FILE))
+        .then(function (data) {
+          if (data && data.paths && typeof data.paths === "object") {
+            localManifest = { paths: data.paths, savedAt: data.savedAt || "" };
+          } else {
+            localManifest = { paths: {}, savedAt: "" };
+          }
+          return localManifest;
+        })
+        .catch(function (err) {
+          localManifest = { paths: {}, savedAt: "" };
+          addLog("error", "本地文件清单加载失败: " + ((err && err.message) || err));
+          return localManifest;
+        });
+    } catch (e) {
+      localManifest = { paths: {}, savedAt: "" };
+      return Promise.resolve(localManifest);
+    }
+  }
+
+  /**
+   * 保存本地文件清单(patch 在每次同步成功后注入调用)。
+   * paths 为同步完成后本地确实存在的文件路径数组(由 vendor 枚举传入)。
+   */
+  function saveLocalManifest(paths) {
+    try {
+      const map = {};
+      if (Array.isArray(paths)) {
+        for (let i = 0; i < paths.length; i++) {
+          const p = paths[i];
+          if (p) map[String(p)] = true;
+        }
+      }
+      localManifest = { paths: map, savedAt: new Date().toISOString() };
+      plugin
+        .saveData(MANIFEST_FILE, localManifest)
+        .catch(function (err) {
+          addLog("error", "本地文件清单保存失败: " + ((err && err.message) || err));
+        });
+      return true;
+    } catch (e) {
+      addLog("error", "本地文件清单保存异常: " + ((e && e.message) || e));
+      return false;
+    }
+  }
+
+  /**
+   * P0: 判断路径是否属于当前同步范围。
+   * 与 vendor Ir(O, "/*") 的语义一致:
+   *   0=工作空间(全部) 1=data 目录 2=笔记文档(data/assets、data/.siyuan、各笔记本)
+   * 同步范围外的文件绝不能因为 LOCAL 枚举不到就判为用户删除。
+   */
+  function getSyncRange() {
+    try {
+      const v = plugin && plugin.settingUtils ? plugin.settingUtils.get(SETTING.syncRange) : undefined;
+      const n = Number(v);
+      return isNaN(n) ? 0 : n;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function inSyncScope(path) {
+    const p = String(path == null ? "" : path).replace(/\\/g, "/");
+    const range = getSyncRange();
+    if (range === 0) return true; // 工作空间: 全部
+    if (range === 1) return p.indexOf("data/") === 0; // data 目录
+    // 笔记文档: 资产目录、.siyuan 目录或各笔记本目录(data/<notebookId>/)
+    if (p.indexOf("data/assets/") === 0) return true;
+    if (p.indexOf("data/.siyuan/") === 0) return true;
+    const m = /^data\/(\d{14}-[a-zA-Z0-9]+)(?:\/|$)/.exec(p);
+    return !!m;
+  }
+
+  /**
+   * P0: 删除安全判定 ——「未知 ≠ 删除」。
+   * 只有能证明「本地曾经拥有该文件(本地清单中存在)且该文件属于当前
+   * 同步范围」时才允许生成远端删除;否则返回 {allow:false, reason}。
+   * @returns {{allow:boolean, reason:string}}
+   */
+  function guardLocalDelete(path) {
+    const p = String(path == null ? "" : path);
+    const reasons = [];
+    if (enumErrorOccurred) {
+      reasons.push("本地目录枚举异常");
+    }
+    if (!inSyncScope(p)) {
+      reasons.push("不在当前同步范围");
+    }
+    const manifestPaths = getManifestPaths();
+    if (!localManifest || !localManifest.paths) {
+      reasons.push("本地文件清单未加载");
+    } else if (!manifestPaths[p]) {
+      reasons.push("本地文件清单中不存在该文件(新设备/首次同步/从未下载)");
+    }
+    if (reasons.length > 0) {
+      return { allow: false, reason: reasons.join(";") };
+    }
+    return { allow: true, reason: "" };
+  }
+
+  /**
+   * P0: 上传前内容完整性防护 —— 源文件非空时,禁止生成空 Blob/空文件。
+   * 由 patch 在 addFileToWorkArea / readFileBlob 注入调用。
+   * @param {string} path 文件路径
+   * @param {number} size 声明的大小
+   * @param {*} content 实际内容(Buffer/ArrayBuffer)
+   * @returns {boolean} true=内容合法; false=内容为空且 size 非空(异常)
+   */
+  function contentIntegrityCheck(path, size, content) {
+    try {
+      const p = String(path == null ? "" : path);
+      const sz = Number(size) || 0;
+      let actual = 0;
+      if (content) {
+        if (typeof content.length === "number") actual = content.length;
+        else if (typeof content.byteLength === "number") actual = content.byteLength;
+      }
+      // 笔记文档(.sy)永远不应为空: SiYuan 文档至少是 JSON 结构
+      const isSy = /\.sy$/i.test(p);
+      if (isSy && sz === 0) {
+        addLog("error", "数据完整性异常: 笔记文件内容为空,已拒绝上传/写入 -> " + p);
+        return false;
+      }
+      if (sz > 0 && actual === 0) {
+        addLog("error", "数据完整性异常: 文件声明非空但内容为空,已拒绝上传/写入 -> " + p);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      return true; // 校验本身失败不阻断(交由后续真实写入判断)
+    }
+  }
+
+  /** 产生数据完整性错误的可见消息(供 patch 注入抛错使用) */
+  function integrityErrorMessage(path, stage) {
+    return "数据完整性异常: " + (stage || "内容校验") + " -> " + String(path == null ? "" : path);
+  }
+
+  /**
+   * P0: 判断本地文件是否已存在且非空(远端空内容防护用)。
+   * 通过 /api/file/getFile 读取本地文件,失败/不存在/为空均视为 false。
+   * @returns {Promise<boolean>}
+   */
+  function localFileExists(path) {
+    try {
+      return Promise.resolve(
+        fetch("/api/file/getFile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: String(path == null ? "" : path) }),
+        })
+      )
+        .then(function (res) {
+          if (!res || !res.ok) return false;
+          return res
+            .blob()
+            .then(function (b) {
+              return !!(b && b.size > 0);
+            })
+            .catch(function () {
+              return false;
+            });
+        })
+        .catch(function () {
+          return false;
+        });
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+  }
+
   /** 记录一条同步历史并持久化(环形保留,失败可观测) */
   function addHistoryEntry(entry) {
     const item = {
@@ -587,6 +798,12 @@ export function createSyncFlowHost(plugin, q) {
       host.restorePromise = Promise.resolve(plugin.loadData(DATA_FILE));
     } catch (e) {
       host.restorePromise = Promise.reject(e);
+    }
+    // P0: 加载本地文件清单(删除安全判定的证据;失败仅记日志,不影响冲突恢复)
+    try {
+      loadLocalManifest();
+    } catch (e) {
+      addLog("error", "本地文件清单加载异常: " + ((e && e.message) || e));
     }
     // M1: 恢复同步历史(失败仅记日志,不影响冲突恢复)
     try {
@@ -1136,6 +1353,17 @@ export function createSyncFlowHost(plugin, q) {
   host.isSyncNotifyEnabled = isSyncNotifyEnabled;
   host.classifyError = classifyError;
   host.getErrorSummary = getErrorSummary;
+  // P0: 数据完整性 / 删除安全 辅助(patch 注入调用)
+  host.noteEnumError = noteEnumError;
+  host.resetEnumError = resetEnumError;
+  host.loadLocalManifest = loadLocalManifest;
+  host.saveLocalManifest = saveLocalManifest;
+  host.getManifestPaths = getManifestPaths;
+  host.guardLocalDelete = guardLocalDelete;
+  host.inSyncScope = inSyncScope;
+  host.contentIntegrityCheck = contentIntegrityCheck;
+  host.integrityErrorMessage = integrityErrorMessage;
+  host.localFileExists = localFileExists;
 
   // 把宿主句柄挂到插件实例上(便于调试/测试访问,不影响插件行为)
   try {

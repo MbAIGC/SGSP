@@ -1,190 +1,3578 @@
-"use strict";var ua=Object.defineProperty;var Cn=r=>{throw TypeError(r)};var ha=(r,e,t)=>e in r?ua(r,e,{enumerable:!0,configurable:!0,writable:!0,value:t}):r[e]=t;var H=(r,e,t)=>ha(r,typeof e!="symbol"?e+"":e,t),kn=(r,e,t)=>e.has(r)||Cn("Cannot "+t);var Ot=(r,e,t)=>(kn(r,e,"read from private field"),t?t.call(r):e.get(r)),_s=(r,e,t)=>e.has(r)?Cn("Cannot add the same private member more than once"):e instanceof WeakSet?e.add(r):e.set(r,t),Kt=(r,e,t,s)=>(kn(r,e,"write to private field"),s?s.call(r,t):e.set(r,t),t);var ci=(r,e,t,s)=>({set _(i){Kt(r,e,i,t)},get _(){return Ot(r,e,s)}});const q=require("siyuan");
-// <<< GIT-SYNC conflict-flow runtime (injected by patch/apply-patch.mjs) >>>
-var __gSyncHostFactory=(function(){
-/**
- * ============================================================================
- * GIT 同步插件 —— 同步状态机 / 冲突处理闭环 / 状态通知 运行时
- * ============================================================================
- *
- * 本模块是本次重构的「单一事实来源」:
- *  - 被 patch/apply-patch.mjs 内联(export 关键字剥离后)注入原生 bundle,
- *    从而在不改动原有同步算法的情况下,给插件加上:
- *        发现冲突 → 🔴冲突状态 → 暂停自动同步 → 通知用户
- *        → 用户选择(保留本地/保留远端/打开冲突文档/稍后处理)
- *        → 解决冲突 → 🟢恢复自动同步
- *  - 被 tests/sync-flow.test.mjs 直接引用,使用假插件实例进行单元测试。
- *
- * 语法约束(与原生 bundle 保持一致,避免注入后被解析失败):
- *  - 不使用可选链(?.)
- *  - 不使用模板字符串(用 + 拼接)
- *  - 不使用 ??(对应场景用 || 或显式判断)
- *  - 不依赖浏览器 API(除宿主注入的 q / plugin)
- *
- * 状态机:
- *
- *   IDLE ──sync()──▶ RUNNING ──成功──▶ SUCCESS ──(自动同步下一轮)──▶ RUNNING
- *                      │
- *                      ├── 失败(非冲突)──▶ FAILED ──(下一轮自动重试 / 用户手动)──▶ RUNNING
- *                      └── 冲突(cause 链含 code===300)──▶ CONFLICT
- *                                                              │
- *                                                           暂停自动同步(timerTask.removeSelf)
- *                                                              ▼
- *                                                        CONFLICT_PAUSED  ◀──持久化,重启后仍保持
- *                                                              │
- *                                         ┌────────────────────┼─────────────────────┐
- *                                         ▼                    ▼                     ▼
- *                                    保留本地版本          保留远端版本            稍后处理/打开冲突文档
- *                                    (强制 本地覆盖远端)  (强制 远端覆盖本地)      (维持暂停)
- *                                         │                    │
- *                                         └────────┬───────────┘
- *                                                  ▼
- *                                             RESOLVING ──成功──▶ RESOLVED
- *                                                                   │
- *                                                         恢复自动同步(startAutoSync)
- *                                                                   ▼
- *                                                                SUCCESS / IDLE
- *
- * 通知:
- *  - 冲突发生: 顶栏图标 🔴 红色闪烁 + 持久化弹窗 + 一次性 toast(避免自动同步反复轰炸)
- *  - 冲突未解决时自动同步被跳过: 每个暂停会话只提示一次
- *  - 冲突解决后: toast 告知并自动恢复自动同步
- *  - 失败(网络/Token/仓库未初始化等): 保持原有 toast 行为不变
- * ============================================================================
- */
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-"use strict";
-
-/** 同步状态枚举 */
-const SyncState = Object.freeze({
-  IDLE: "idle",
-  RUNNING: "running",
-  SUCCESS: "success",
-  FAILED: "failed",
-  CONFLICT: "conflict",
-  CONFLICT_PAUSED: "conflict_paused",
-  RESOLVING: "resolving",
-  RESOLVED: "resolved",
+// src/plugin/index.js
+var index_exports = {};
+__export(index_exports, {
+  default: () => SyGspPlugin
 });
+module.exports = __toCommonJS(index_exports);
+var q = __toESM(require("siyuan"));
 
-/**
- * 插件设置键(与原生 bundle 中的常量对应,这里用字符串值,
- * 避免注入代码依赖被压缩过的变量名)
- */
-const SETTING = Object.freeze({
-  syncMode: "sync_mode", // Ne: 0=自动 1=手动 2=完全手动
-  syncInterval: "sync_interval", // je: 自动同步间隔(毫秒)
-  syncStrategy: "sync_strategy", // lt: 0=自动 1=选择方向 2=远端覆盖本地 3=本地覆盖远端
-  enabledSync: "enabled_sync", // Me
+// src/local/kernel.js
+function createKernel(q2) {
+  async function post(path, data) {
+    if (q2 && typeof q2.fetchSyncPost === "function") {
+      const res = await q2.fetchSyncPost(path, data);
+      if (res && typeof res.code === "number" && res.code !== 0) {
+        throw new Error("内核请求失败 " + path + ": " + (res.msg || res.code));
+      }
+      return res && res.data !== void 0 ? res.data : res;
+    }
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data || {})
+    });
+    if (!resp.ok) throw new Error("内核请求失败 " + path + ": HTTP " + resp.status);
+    const text = await resp.text();
+    try {
+      const json = JSON.parse(text);
+      if (json && json.code && json.code !== 0) throw new Error("内核请求失败 " + path + ": " + (json.msg || json.code));
+      return json && json.data !== void 0 ? json.data : json;
+    } catch (e) {
+      if (e instanceof SyntaxError) return text;
+      throw e;
+    }
+  }
+  async function getFile(path) {
+    const resp = await fetch("/api/file/getFile", {
+      method: "POST",
+      body: JSON.stringify({ path })
+    });
+    return resp.ok ? resp.blob() : null;
+  }
+  async function putFile(path, blob, isDir = false) {
+    const form = new FormData();
+    form.append("path", path);
+    form.append("isDir", String(isDir));
+    form.append("modTime", String(Date.now()));
+    form.append("file", blob);
+    const resp = await fetch("/api/file/putFile", { method: "POST", body: form });
+    if (!resp.ok) throw new Error("写入本地文件失败 " + path + ": HTTP " + resp.status);
+    return resp.json();
+  }
+  async function removeFile(path) {
+    return post("/api/file/removeFile", { path });
+  }
+  async function readDir(path) {
+    const data = await post("/api/file/readDir", { path });
+    if (Array.isArray(data)) return data;
+    const dirs = Array.isArray(data && data.dir) ? data.dir : [];
+    const files = Array.isArray(data && data.file) ? data.file : [];
+    return dirs.concat(files);
+  }
+  return {
+    post,
+    getFile,
+    putFile,
+    removeFile,
+    readDir,
+    exportMdContent: (id) => post("/api/export/exportMdContent", { id }),
+    createDocWithMd: (notebook, path, markdown) => post("/api/filetree/createDocWithMd", { notebook, path, markdown }),
+    createDoc: (notebook, path, title, md) => post("/api/filetree/createDoc", { notebook, path, title, md, listDocTree: false }),
+    updateBlock: (dataType, data, id) => post("/api/block/updateBlock", { dataType, data, id }),
+    getBlockKramdown: (id) => post("/api/block/getBlockKramdown", { id }),
+    sql: (stmt) => post("/api/query/sql", { stmt }),
+    lsNotebooks: () => post("/api/notebook/lsNotebooks", {}),
+    createNotebook: (name) => post("/api/notebook/createNotebook", { name }),
+    getNotebookConf: (notebook) => post("/api/notebook/getNotebookConf", { notebook }),
+    refreshFiletree: () => post("/api/filetree/refreshFiletree", {})
+  };
+}
+
+// src/local/ignore-rules.js
+var DEFAULT_IGNORES = Object.freeze([
+  "data/plugins/*",
+  "data/widgets/*",
+  ".lock",
+  "temp/*"
+]);
+var ALWAYS_IGNORES = Object.freeze(["data/storage/petal/SY-GSP/*"]);
+function normalizeUserIgnores(raw) {
+  return String(raw == null ? "" : raw).split(";").map((s) => s.trim().replace(/^\/+|\/+$/g, "").trim()).filter((s) => s.length > 0);
+}
+function isIgnored(path, patterns) {
+  const p = String(path == null ? "" : path).toLowerCase();
+  return patterns.some((pattern) => {
+    const s = String(pattern).toLowerCase();
+    if (s.indexOf("*") === -1) return p === s;
+    return new RegExp("^" + s.replace(/\*/g, ".*") + "$").test(p);
+  });
+}
+function buildIgnoreList(userRaw, extra = []) {
+  return [
+    ...DEFAULT_IGNORES,
+    ...ALWAYS_IGNORES,
+    ...normalizeUserIgnores(userRaw),
+    ...normalizeUserIgnores(Array.isArray(extra) ? extra.join(";") : String(extra || ""))
+  ];
+}
+
+// src/util/path.js
+function basename(p) {
+  const s = String(p == null ? "" : p);
+  const idx = s.lastIndexOf("/");
+  return idx >= 0 ? s.slice(idx + 1) : s;
+}
+function extname(p) {
+  const name = basename(p);
+  const idx = name.lastIndexOf(".");
+  if (idx <= 0) return "";
+  return name.slice(idx);
+}
+function isSiyuanDocPath(p) {
+  return /^data\/(\d{14}-[a-zA-Z0-9]+)(\/\d{14}-[a-zA-Z0-9]+)*(\.sy)?$/.test(String(p == null ? "" : p));
+}
+
+// src/local/workspace-adapter.js
+var WorkspaceAdapter = class {
+  /**
+   * @param {object} kernel createKernel 产物
+   * @param {object} opts {getUserIgnore: () => string, getSyncRange: () => number, getNotebooks: async () => [{id,name}]}
+   */
+  constructor(kernel, opts = {}) {
+    this.kernel = kernel;
+    this.getUserIgnore = opts.getUserIgnore || (() => "");
+    this.getSyncRange = opts.getSyncRange || (() => 0);
+    this.getNotebooks = opts.getNotebooks || (async () => []);
+    this.enumErrorOccurred = false;
+  }
+  resetEnumError() {
+    this.enumErrorOccurred = false;
+  }
+  /** 当前同步范围对应的扫描根(空串表示整个工作空间) */
+  async rootsFor(range) {
+    if (range === void 0 || range === null) range = this.getSyncRange();
+    const notebooks = range === 2 ? await this.getNotebooks() : [];
+    const roots = [];
+    if (range === 0) roots.push("");
+    else if (range === 1) roots.push("data");
+    else {
+      roots.push("data/assets", "data/.siyuan");
+      for (const n of notebooks) roots.push("data/" + n.id);
+    }
+    return roots;
+  }
+  /**
+   * 扫描工作区文件清单。
+   * @param {object} opts {range, onlyChangedSince: Date|0, extraIgnores: string[]}
+   * @returns {Promise<{files:Array<{path,name,updated:number}>, enumErrorOccurred:boolean}>}
+   */
+  async scan({ range, onlyChangedSince = 0, extraIgnores = [] } = {}) {
+    this.resetEnumError();
+    const ignores = buildIgnoreList(this.getUserIgnore(), extraIgnores);
+    const roots = await this.rootsFor(range !== void 0 ? range : this.getSyncRange());
+    const files = [];
+    const sinceMs = onlyChangedSince ? new Date(onlyChangedSince).getTime() : 0;
+    for (let root of roots) {
+      const queue = [root];
+      while (queue.length > 0) {
+        const dir = queue.pop();
+        if (dir !== "" && isIgnored(dir, ignores)) continue;
+        let entries;
+        try {
+          entries = await this.kernel.readDir(dir);
+        } catch (err) {
+          this.enumErrorOccurred = true;
+          continue;
+        }
+        for (const entry of entries || []) {
+          const path = dir === "" ? entry.name : dir + "/" + entry.name;
+          if (isIgnored(path, ignores)) continue;
+          if (entry.isDir) {
+            queue.push(path);
+            continue;
+          }
+          let updatedMs = new Date(entry.updated).getTime() * 1e3;
+          if (!(updatedMs < Date.now())) updatedMs = 0;
+          if (sinceMs && updatedMs <= sinceMs) continue;
+          files.push({ path, name: entry.name, updated: updatedMs });
+        }
+      }
+    }
+    return { files, enumErrorOccurred: this.enumErrorOccurred };
+  }
+  /** 路径是否属于当前同步范围(删除守卫用,与扫描范围语义一致) */
+  async inSyncScope(path, range) {
+    const p = String(path == null ? "" : path).replace(/\\/g, "/");
+    const r = range !== void 0 ? range : this.getSyncRange();
+    if (r === 0) return true;
+    if (p.indexOf("data/") !== 0) return false;
+    if (r === 1) return true;
+    if (p.indexOf("data/assets/") === 0) return true;
+    if (p.indexOf("data/.siyuan/") === 0) return true;
+    return /^data\/(\d{14}-[a-zA-Z0-9]+)(\/|$)/.test(p);
+  }
+  /**
+   * 删除安全判定。
+   * @returns {Promise<{allow:boolean, reasons:string[]}>}
+   */
+  async guardLocalDelete(path, manifest, { remoteEntryExists } = {}) {
+    const reasons = [];
+    if (this.enumErrorOccurred) reasons.push("本地目录枚举异常");
+    if (!await this.inSyncScope(path)) reasons.push("不在当前同步范围");
+    if (!manifest || !manifest.has(path)) {
+      reasons.push("本地清单中不存在该文件(新设备/首次同步/从未下载)");
+    }
+    if (remoteEntryExists === false) reasons.push("远端已无此文件,无需删除");
+    return { allow: reasons.length === 0, reasons };
+  }
+};
+
+// src/local/content-adapter.js
+var BINARY_EXTENSIONS = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".bmp",
+  ".webp",
+  ".mp4",
+  ".avi",
+  ".mov",
+  ".mkv",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ttf",
+  ".woff2",
+  ".woff",
+  ".otf",
+  ".eot",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".rar",
+  ".exe",
+  ".dll",
+  ".bin",
+  ".tmp",
+  ".swp",
+  ".bak",
+  ".log",
+  ".so",
+  ".dylib",
+  ".dat",
+  ".img",
+  ".iso",
+  ".bz2",
+  ".mp3",
+  ".wav",
+  ".flac",
+  ".aac",
+  ".wmv",
+  ".swf",
+  ".apk",
+  ".ipa",
+  ".jar",
+  ".class",
+  ".pyc",
+  ".o",
+  ".obj",
+  ".a",
+  ".lib",
+  ".pdb",
+  ".db",
+  ".sqlite",
+  ".mdb",
+  ".accdb",
+  ".cur",
+  ".ico",
+  ".icns",
+  ".cab",
+  ".msi",
+  ".msp",
+  ".msu",
+  ".nupkg",
+  ".deb",
+  ".rpm",
+  ".pkg",
+  ".dmg",
+  ".torrent",
+  ".crdownload",
+  ".part"
+];
+function isBinaryPath(path) {
+  return BINARY_EXTENSIONS.indexOf(String(extname(path)).toLowerCase()) >= 0;
+}
+var ContentAdapter = class {
+  /**
+   * @param {object} kernel createKernel 产物
+   * @param {object} opts {backupDir: 删除备份根路径, i18n}
+   */
+  constructor(kernel, opts = {}) {
+    this.kernel = kernel;
+    this.backupDir = opts.backupDir || "temp/SY-GSP/backup/";
+    this.i18n = opts.i18n || {};
+  }
+  /**
+   * 读取文件内容为 Blob。
+   * @param {string} path 本地路径
+   * @param {"raw"|"markdown"} format markdown 模式走内核导出并剥离 front-matter
+   */
+  async readFileBlob(path, format = "raw") {
+    if (format === "markdown") {
+      const docId = basename(path, extname(path));
+      const exported = await this.kernel.exportMdContent(docId);
+      if (!exported || !exported.content || String(exported.content).length === 0) {
+        throw new Error("数据完整性异常: 导出 Markdown 内容为空,已停止 -> " + path);
+      }
+      const stripped = String(exported.content).replace(/^---\s*\n([\s\S]*?)\n---\s*/, "");
+      return new Blob([stripped]);
+    }
+    const blob = await this.kernel.getFile(path);
+    return blob;
+  }
+  /**
+   * 写入远端内容到本地。
+   * raw: 直接 putFile;markdown: 按思源文档导入语义(create/update)。
+   * @param {string} originalPath 原始本地路径(.sy)
+   * @param {Blob} blob 内容
+   * @param {"raw"|"markdown"} format
+   * @param {"create"|"update"} op
+   */
+  async writeFileBlob(originalPath, blob, format = "raw", op = "create") {
+    if (format === "markdown") {
+      return this._writeMarkdownDoc(originalPath, blob, op);
+    }
+    return this.kernel.putFile(originalPath, blob, false);
+  }
+  /**
+   * Markdown 导入语义(与旧版对齐):
+   * - create: 从路径解析笔记本;笔记本不存在则按目录名创建;createDoc(路径去掉 data/<notebookId> 前缀,剥离首个一级标题);
+   * - update: updateBlock(docId, "markdown", 内容去掉首个一级标题)。
+   */
+  async _writeMarkdownDoc(localPath, blob, op) {
+    const segments = String(localPath).replace(/\\/g, "/").split("/");
+    const notebookDir = segments[1];
+    const mdText = await blob.text();
+    if (op === "update") {
+      const docId = basename(localPath, extname(localPath));
+      return this.kernel.updateBlock("markdown", stripFirstHeading(mdText), docId);
+    }
+    let notebookId = notebookDir;
+    const notebooks = await this.kernel.lsNotebooks();
+    const exists = (notebooks && notebooks.notebooks || []).some((n) => n.id === notebookId);
+    if (!exists) {
+      const created = await this.kernel.createNotebook(notebookDir);
+      notebookId = created && created.notebook && created.notebook.id || notebookId;
+    }
+    const hpath = "/" + segments.slice(2).join("/");
+    const title = extractFirstHeading(mdText) || basename(hpath);
+    return this.kernel.createDoc(notebookId, hpath, title, stripFirstHeading(mdText));
+  }
+  /** 删除本地文件(先备份到隔离目录),返回备份路径 */
+  async removeFileWithBackup(path) {
+    const blob = await this.kernel.getFile(path);
+    let backupPath = "";
+    if (blob) {
+      backupPath = this.backupDir + String(path).replace(/^\/+/, "");
+      await this.kernel.putFile(backupPath, blob, false);
+    }
+    await this.kernel.removeFile(path);
+    return backupPath;
+  }
+  /**
+   * 生成冲突文档(与旧版语义一致,不在原文件上静默覆盖):
+   * - 思源文档(.sy): 把远端内容写入原路径,把本地内容以 createDocWithMd 生成
+   *   "原路径名_conflict_<平台>_<时间戳>" 副本文档;
+   * - 普通文件: 在原文件旁生成 "<名>_conflict_<平台>_<时间戳>.<扩展名>" 副本,
+   *   并把远端内容写入原路径。
+   * @returns {Promise<{conflictPath:string}>}
+   */
+  async createConflictDoc({ path, localBlob, remoteBlob, platform, format }) {
+    const stamp = "_conflict_" + (platform || "") + "_" + Date.now();
+    if (isSiyuanDocPath(path) && format !== "markdown") {
+      const docId = basename(path, extname(path));
+      const block = await this.kernel.getBlockKramdown(docId);
+      const kramdown = block && block.kramdown || "";
+      await this.kernel.putFile(path, remoteBlob, false);
+      const conf = await this.kernel.sql("select * from blocks where id ='" + docId + "'");
+      const info = conf && conf[0] || {};
+      const conflictDocPath = (info.hpath || docId) + stamp;
+      const res = await this.kernel.createDocWithMd(info.box || notebookIdOf(path), conflictDocPath, kramdown);
+      return { conflictPath: "data/" + (info.box || notebookIdOf(path)) + conflictDocPath + ".sy", docId: res };
+    }
+    const ext = extname(path);
+    const conflictPath = path.replace(basename(path), basename(path, ext) + stamp + ext);
+    await this.kernel.putFile(conflictPath, localBlob, false);
+    await this.kernel.putFile(path, remoteBlob, false);
+    return { conflictPath };
+  }
+  /** 导出三方副本到隔离目录,供用户手工比对 */
+  async exportConflictCopies({ path, baseBytes, localBytes, remoteBytes, operationId }) {
+    const dir = "temp/SY-GSP/conflicts/" + operationId + "/";
+    const stem = path.replace(/\//g, "_");
+    const writes = [];
+    if (baseBytes) writes.push([dir + stem + ".base", baseBytes]);
+    if (localBytes) writes.push([dir + stem + ".local", localBytes]);
+    if (remoteBytes) writes.push([dir + stem + ".remote", remoteBytes]);
+    for (const [p, bytes] of writes) {
+      await this.kernel.putFile(p, new Blob([bytes]), false);
+    }
+    return { dir, files: writes.map((w) => w[0]) };
+  }
+  /**
+   * 资源路径前缀替换(与旧版 $s 对齐):
+   * - path 为空: 全工作空间 spans;否则限定 box+root_id;
+   * - 将 markdown 中 "(..)assets/" 形式链接替换为配置前缀;无匹配时回退 "[text](link)" 整体替换。
+   */
+  async replaceAssetPrefix({ path, assetsPrefix }) {
+    let stmt = "select * from spans where type in ('img','textmark a')";
+    if (path) {
+      const notebookID = notebookIdOf(path);
+      const docID = basename(path, extname(path));
+      stmt = "select * from spans where box = '" + notebookID + "' and root_id = '" + docID + "' and type in ('img','textmark a')";
+    }
+    const spans = await this.kernel.sql(stmt);
+    if (!spans || spans.length === 0) return { updated: 0 };
+    let prefix = assetsPrefix || "assets/";
+    if (!prefix.endsWith("/")) prefix += "/";
+    const pattern = /(?<=\()\/*(?:[^/]+\/)?assets\//g;
+    let updated = 0;
+    for (const span of spans) {
+      let markdown = span.markdown || "";
+      if (pattern.test(markdown)) {
+        markdown = markdown.replace(pattern, prefix);
+      } else {
+        const m = /(!?\[[^\]]+\])(\(([^)]+)\))/.exec(markdown);
+        if (m) {
+          const link = m[3].replace(/^[/\\]+/, "").replace(/\\/g, "/");
+          markdown = m[1] + "(" + encodeURI(prefix + link).replace(/%2F/g, "/") + ")";
+        }
+      }
+      if (markdown !== span.markdown) {
+        await this.kernel.updateBlock("markdown", markdown, span.block_id || span.id);
+        updated += 1;
+      }
+    }
+    return { updated };
+  }
+};
+function notebookIdOf(path) {
+  const seg = String(path).replace(/\\/g, "/").split("/");
+  return /^data$/.test(seg[0]) ? seg[1] : seg[0];
+}
+function extractFirstHeading(md) {
+  const m = /^\s*#\s+(.+)/m.exec(String(md || ""));
+  return m ? m[1] : "";
+}
+function stripFirstHeading(md) {
+  return String(md || "").replace(/^\s*#\s+(.+)/m, "");
+}
+
+// src/sync/sync-error.js
+var SyncErrorCategory = Object.freeze({
+  NETWORK: "NETWORK",
+  TIMEOUT: "TIMEOUT",
+  AUTH: "AUTH",
+  PERMISSION: "PERMISSION",
+  REPOSITORY: "REPOSITORY",
+  BRANCH: "BRANCH",
+  REMOTE_CHANGED: "REMOTE_CHANGED",
+  PUSH_REJECTED: "PUSH_REJECTED",
+  CONFLICT: "CONFLICT",
+  LARGE_FILE: "LARGE_FILE",
+  LOCAL_FILE: "LOCAL_FILE",
+  GIT: "GIT",
+  CANCELLED: "CANCELLED",
+  UNKNOWN: "UNKNOWN"
 });
-
-/** sync_strategy 取值 */
-const STRATEGY = Object.freeze({
-  AUTO: 0,
-  CHOOSE: 1,
-  REMOTE_OVER_LOCAL: 2,
-  LOCAL_OVER_REMOTE: 3,
-});
-
-/** sync_mode 取值 */
-const SYNC_MODE = Object.freeze({
-  AUTO: 0,
-  MANUAL: 1,
-  FULL_MANUAL: 2,
-});
-
-/** 冲突错误码(dr.CONFLICT = 300) */
-const CONFLICT_CODE = 300;
-
-/** 持久化文件名(存放冲突暂停状态,重启后仍保持暂停) */
-const DATA_FILE = "git-sync-flow.json";
-
-/** 同步历史持久化文件名(环形保留最近 N 次同步结果,重启后可查) */
-const HISTORY_FILE = "git-sync-history.json";
-
-/** 同步历史最多保留条数 */
-const HISTORY_LIMIT = 50;
-
-/** 错误分类的用户可见中文文案 */
-const CATEGORY_LABEL = Object.freeze({
-  NETWORK: "网络连接失败",
-  AUTH: "Token 无效,请重新配置",
-  PERMISSION: "权限不足或 API 限流",
-  REPOSITORY: "仓库不存在,请检查设置",
-  BRANCH: "分支不存在,请检查设置",
-  CONFLICT: "文件冲突,已暂停",
-  PUSH_REJECTED: "远端已更新,重新同步",
-  BLOB_LIMIT: "文件过大,已跳过",
-  GIT_API: "Git API 错误",
-  UNKNOWN: "未知错误",
-});
-
-/**
- * 错误分类器(M1 基础版): 沿 cause 链收集特征并归类。
- * 只做展示/重试决策,不改变「非冲突错误重抛」的语义。
- * @returns {{category:string,retryable:boolean,recoverable:boolean,status:number,path:string,message:string}}
- */
+var SyncError = class extends Error {
+  constructor(fields) {
+    const message = String(fields && fields.message || "同步错误");
+    super(message);
+    this.name = "SyncError";
+    this.category = fields && fields.category || SyncErrorCategory.UNKNOWN;
+    this.code = fields && fields.code || "";
+    this.operation = fields && fields.operation || "";
+    this.phase = fields && fields.phase || "";
+    this.httpStatus = fields && fields.httpStatus || 0;
+    this.path = fields && fields.path || "";
+    this.detail = fields && fields.detail || "";
+    this.retryable = !!(fields && fields.retryable);
+    this.recoverable = !!(fields && fields.recoverable);
+    this.cause = fields && fields.cause || null;
+  }
+  /** 面向用户的单行摘要(HTTP 状态 + 文件路径 + 消息) */
+  toDisplayText() {
+    let text = this.message;
+    if (this.httpStatus) text = "HTTP " + this.httpStatus + ": " + text;
+    if (this.path) text += " (" + this.path + ")";
+    return String(text).slice(0, 500);
+  }
+  toSerializable() {
+    return {
+      category: this.category,
+      code: this.code,
+      operation: this.operation,
+      phase: this.phase,
+      httpStatus: this.httpStatus,
+      path: this.path,
+      message: this.message,
+      detail: redact(this.detail),
+      retryable: this.retryable,
+      recoverable: this.recoverable
+    };
+  }
+};
+function redact(text) {
+  return String(text == null ? "" : text).replace(/Bearer\s+\S+/gi, "Bearer [已隐藏]").replace(/(token|access_token|client_secret|secret|password|passwd)["']?\s*[:=]\s*["']?[^\s"',;&]+/gi, "$1=[已隐藏]").replace(/(authorization|cookie)["']?\s*[:=][^"',;&]+/gi, "$1=[已隐藏]").replace(/token\s+[A-Za-z0-9_.\-]{8,}/g, "token [已隐藏]");
+}
+var NETWORK_PATTERN = /(timeout|timed?\s?out|econn|enotfound|eai_again|aborted|aborterror|socket|network|fetch failed|连接|网络|超时|dns|getaddrinfo)/i;
+var LARGE_FILE_PATTERN = /(too large|too big|exceed|文件过大|过大|超过.*限|file size)/i;
+function statusOf(node) {
+  if (node && typeof node.status === "number" && node.status) return node.status;
+  if (node && node.response && typeof node.response.status === "number") return node.response.status;
+  return 0;
+}
+function messageOf(node) {
+  const data = node && node.response && node.response.data || {};
+  const m = data.message || node && node.message || "";
+  return m ? String(m) : "";
+}
+var CONFLICT_CODE = 300;
 function classifyError(err) {
   let node = err;
   let status = 0;
   let path = "";
   let message = "";
   let conflict = false;
-  for (let i = 0; node && i < 7; i++) {
-    if (node.code === CONFLICT_CODE) conflict = true;
-    if (!status) {
-      const st = node.status || (node.response && node.response.status) || 0;
-      if (st) status = st;
+  let aborted = false;
+  for (let i = 0; node && i < 8; i++) {
+    if (node.category === SyncErrorCategory.CONFLICT || node.code === CONFLICT_CODE) conflict = true;
+    if (node instanceof SyncError && node.category) {
+      if (!status) status = statusOf(node);
+      if (!path && node.path) path = node.path;
+      return {
+        category: node.category,
+        httpStatus: status,
+        path,
+        message: node.message || message || String(err && err.message || err || "未知错误"),
+        retryable: node.retryable,
+        recoverable: node.recoverable
+      };
     }
+    if (!status) status = statusOf(node);
     if (!path && node.path) path = node.path;
-    if (!message && node.message) message = String(node.message);
-    node = node.cause;
+    const m = messageOf(node);
+    if (m) message = m;
+    if (node && (node.name === "AbortError" || /abort/i.test(String(node.message || "")))) aborted = true;
+    node = node.cause || node instanceof Error && node.cause || null;
   }
-  const text = (message || "").toLowerCase();
-  const needUser = { retryable: false, recoverable: true };
-  if (conflict) {
-    return { category: "CONFLICT", retryable: false, recoverable: true, status: status, path: path, message: message };
-  }
-  if (status === 401) {
-    return { category: "AUTH", retryable: false, recoverable: true, status: status, path: path, message: message };
-  }
-  if (status === 403) {
-    return { category: "PERMISSION", retryable: false, recoverable: true, status: status, path: path, message: message };
-  }
+  const text = (message || String(err && err.message || err || "")).toLowerCase();
+  const base = { httpStatus: status, path, message: message || String(err && err.message || err || "未知错误") };
+  if (conflict) return { ...base, category: SyncErrorCategory.CONFLICT, retryable: false, recoverable: true };
+  if (aborted) return { ...base, category: SyncErrorCategory.CANCELLED, retryable: false, recoverable: true };
+  if (status === 401) return { ...base, category: SyncErrorCategory.AUTH, retryable: false, recoverable: true };
+  if (status === 403) return { ...base, category: SyncErrorCategory.PERMISSION, retryable: false, recoverable: true };
   if (status === 404) {
-    const cat = /branch|分支|ref/i.test(text) ? "BRANCH" : "REPOSITORY";
-    return { category: cat, retryable: false, recoverable: true, status: status, path: path, message: message };
+    const cat = /branch|分支|ref|refname/i.test(text) ? SyncErrorCategory.BRANCH : SyncErrorCategory.REPOSITORY;
+    return { ...base, category: cat, retryable: false, recoverable: true };
   }
   if (status === 409 || status === 422) {
-    return { category: "PUSH_REJECTED", retryable: true, recoverable: false, status: status, path: path, message: message };
+    return { ...base, category: SyncErrorCategory.PUSH_REJECTED, retryable: true, recoverable: false };
   }
-  if (status === 413) {
-    return { category: "BLOB_LIMIT", retryable: false, recoverable: true, status: status, path: path, message: message };
-  }
-  if (status >= 400) {
-    return { category: "GIT_API", retryable: true, recoverable: false, status: status, path: path, message: message };
-  }
-  if (/(timeout|econn|enotfound|aborted|aborterror|socket|network|连接|网络|超时|dns)/i.test(text)) {
-    return { category: "NETWORK", retryable: true, recoverable: false, status: status, path: path, message: message };
-  }
-  if (/(limited|过大|超过|too large|exceed|file size)/i.test(text)) {
-    return { category: "BLOB_LIMIT", retryable: false, recoverable: true, status: status, path: path, message: message };
-  }
-  return { category: "UNKNOWN", retryable: true, recoverable: false, status: status, path: path, message: message };
+  if (status === 413) return { ...base, category: SyncErrorCategory.LARGE_FILE, retryable: false, recoverable: true };
+  if (status >= 400) return { ...base, category: SyncErrorCategory.GIT, retryable: false, recoverable: false };
+  if (/(timeout|timed?\s?out|超时)/i.test(text)) return { ...base, category: SyncErrorCategory.TIMEOUT, retryable: true, recoverable: false };
+  if (NETWORK_PATTERN.test(text)) return { ...base, category: SyncErrorCategory.NETWORK, retryable: true, recoverable: false };
+  if (LARGE_FILE_PATTERN.test(text)) return { ...base, category: SyncErrorCategory.LARGE_FILE, retryable: false, recoverable: true };
+  return { ...base, category: SyncErrorCategory.UNKNOWN, retryable: false, recoverable: false };
+}
+function toSyncError(err, defaults = {}) {
+  if (err instanceof SyncError) return err;
+  const c = classifyError(err);
+  return new SyncError({
+    category: defaults.category || c.category,
+    operation: defaults.operation || "",
+    phase: defaults.phase || "",
+    httpStatus: c.httpStatus,
+    path: defaults.path || c.path,
+    message: defaults.message || c.message,
+    detail: redact(String(err && err.message || err || "")),
+    retryable: defaults.retryable !== void 0 ? defaults.retryable : c.retryable,
+    recoverable: defaults.recoverable !== void 0 ? defaults.recoverable : c.recoverable,
+    cause: err
+  });
 }
 
-/**
- * 极简事件总线(on/off/emit),不引依赖,遵守注入语法约束。
- * 用于同步层与通知层解耦: sync:start / sync:success / sync:error / sync:conflict / sync:paused / sync:resumed / sync:history
- */
+// src/git/http-client.js
+var HttpClient = class {
+  constructor({ baseUrl, token, timeoutMs = 3e4, platform = "" } = {}) {
+    this.baseUrl = String(baseUrl || "").replace(/\/+$/, "");
+    this.token = token || "";
+    this.timeoutMs = timeoutMs;
+    this.platform = platform;
+  }
+  /**
+   * 发起 JSON 请求。
+   * @param {object} opts {method, path(以/开头,或完整url), query, body, headers, responseType:"json"|"text"|"arraybuffer"|"raw", timeoutMs}
+   * @returns {Promise<{status:number, headers:Headers, data:any, link:string}>}
+   */
+  async request(opts) {
+    const method = (opts.method || "GET").toUpperCase();
+    const url = this._buildUrl(opts);
+    const headers = Object.assign({ Accept: "application/json" }, opts.headers || {});
+    if (this.token) headers.Authorization = "token " + this.token;
+    let body;
+    if (opts.body !== void 0 && opts.body !== null) {
+      if (opts.body instanceof ArrayBuffer || opts.body instanceof Uint8Array || typeof opts.body === "string") {
+        body = opts.body;
+        if (!headers["Content-Type"]) headers["Content-Type"] = "application/octet-stream";
+      } else {
+        headers["Content-Type"] = headers["Content-Type"] || "application/json";
+        body = JSON.stringify(opts.body);
+      }
+    }
+    const timeoutMs = opts.timeoutMs || this.timeoutMs;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+      response = await fetch(url, { method, headers, body, signal: controller.signal });
+    } catch (err) {
+      const aborted = err && (err.name === "AbortError" || /abort/i.test(String(err.message || "")));
+      throw new SyncError({
+        category: aborted ? SyncErrorCategory.TIMEOUT : SyncErrorCategory.NETWORK,
+        code: aborted ? "HTTP_TIMEOUT" : "NETWORK_ERROR",
+        operation: method + " " + this._safeUrl(opts),
+        message: aborted ? "请求超时(" + Math.round(timeoutMs / 1e3) + "s)" : "网络连接失败",
+        detail: redact(String(err && err.message || err)),
+        retryable: true,
+        recoverable: false,
+        cause: err
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    const data = await this._parse(response, opts.responseType || "json");
+    if (!response.ok) {
+      const apiMessage = data && typeof data === "object" ? data.message || data.errors || "" : "";
+      throw new SyncError({
+        category: SyncErrorCategory.GIT,
+        code: "HTTP_" + response.status,
+        operation: method + " " + this._safeUrl(opts),
+        httpStatus: response.status,
+        message: this._friendlyStatus(response.status, apiMessage),
+        detail: redact(typeof apiMessage === "string" ? apiMessage : JSON.stringify(apiMessage)),
+        retryable: response.status >= 500 || response.status === 429,
+        recoverable: false
+      });
+    }
+    return { status: response.status, headers: response.headers, data, link: response.headers.get("link") || "" };
+  }
+  _buildUrl(opts) {
+    let url = opts.url || this.baseUrl + (opts.path || "");
+    if (opts.query) {
+      const qs = Object.keys(opts.query).filter((k) => opts.query[k] !== void 0 && opts.query[k] !== null && opts.query[k] !== "").map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(String(opts.query[k]))).join("&");
+      if (qs) url += (url.indexOf("?") >= 0 ? "&" : "?") + qs;
+    }
+    return url;
+  }
+  /** 日志用 URL: 不带 query,避免泄露 token 等参数 */
+  _safeUrl(opts) {
+    return (opts.url || this.baseUrl + (opts.path || "")).replace(/\?.*$/, "");
+  }
+  async _parse(response, type) {
+    if (type === "raw") return response;
+    if (type === "json") {
+      const text = await response.text();
+      try {
+        return text ? JSON.parse(text) : null;
+      } catch (e) {
+        return text;
+      }
+    }
+    if (type === "arraybuffer") return response.arrayBuffer();
+    return response.text();
+  }
+  _friendlyStatus(status, apiMessage) {
+    const suffix = apiMessage ? "(" + redact(String(apiMessage)).slice(0, 200) + ")" : "";
+    switch (status) {
+      case 401:
+        return "Token 无效或已过期" + suffix;
+      case 403:
+        return "权限不足或触发 API 限流" + suffix;
+      case 404:
+        return "仓库、分支或文件不存在,请检查设置" + suffix;
+      case 409:
+      case 422:
+        return "远端引用更新被拒绝(远端已变化或校验失败)" + suffix;
+      case 413:
+        return "请求体超过平台限制" + suffix;
+      default:
+        return "Git API 请求失败(HTTP " + status + ")" + suffix;
+    }
+  }
+};
+
+// src/git/git-provider.js
+var _GitProvider = class _GitProvider {
+  /**
+   * @param {object} opts {platform, owner, repo, branch, token, timeoutMs}
+   */
+  constructor(opts) {
+    this.platform = opts.platform;
+    this.owner = opts.owner;
+    this.repo = opts.repo;
+    this.branch = opts.branch;
+    this.token = opts.token || "";
+    this.http = new HttpClient({
+      baseUrl: this.baseUrl(),
+      token: this.token,
+      timeoutMs: opts.timeoutMs,
+      platform: this.platform
+    });
+  }
+  /** @returns {string} 平台 API 根地址,由子类实现 */
+  baseUrl() {
+    throw new Error("子类必须实现 baseUrl()");
+  }
+  /** 平台展示名 */
+  displayName() {
+    return this.platform;
+  }
+  static textToBytes(text) {
+    return _GitProvider.encoder.encode(String(text == null ? "" : text));
+  }
+  static bytesToText(bytes) {
+    return _GitProvider.decoder.decode(bytes);
+  }
+  static bytesToBase64(bytes) {
+    let binary = "";
+    const chunk = 32768;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+  static base64ToBytes(b64) {
+    const clean = String(b64 || "").replace(/\s+/g, "");
+    const binary = atob(clean);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+  /**
+   * 计算 git blob SHA-1(即 "blob <len>\0<content>" 的 sha1),
+   * 可直接与 tree/compare 返回的 blob sha 对比,无需下载远端内容。
+   * 环境不支持 crypto.subtle 时返回 null,调用方须回退为内容比对。
+   */
+  static async gitBlobSha(content) {
+    const bytes = typeof content === "string" ? _GitProvider.textToBytes(content) : content;
+    if (!(globalThis.crypto && globalThis.crypto.subtle)) return null;
+    const header = _GitProvider.textToBytes("blob " + bytes.length + "\0");
+    const merged = new Uint8Array(header.length + bytes.length);
+    merged.set(header, 0);
+    merged.set(bytes, header.length);
+    const digest = await globalThis.crypto.subtle.digest("SHA-1", merged);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  // ---------- 查询契约 ----------
+  /** 分支 HEAD: 返回 {sha} */
+  async getBranchHead() {
+    throw new Error("子类必须实现 getBranchHead()");
+  }
+  /** 提交详情(sha 或分支名): 返回 {sha, treeSha, message, author, date, parents} */
+  async getCommit(shaOrRef) {
+    throw new Error("子类必须实现 getCommit()");
+  }
+  /** 递归 tree: 返回 [{path, mode, type, sha, size}] */
+  async getTree(treeSha) {
+    throw new Error("子类必须实现 getTree()");
+  }
+  /** blob 内容: 返回 {sha, size, contentBase64, bytes} */
+  async getBlob(blobSha) {
+    throw new Error("子类必须实现 getBlob()");
+  }
+  /** 按 路径+ref 读取内容(contents API): 返回 {sha, size, contentBase64, bytes} */
+  async getFileContent(path, ref) {
+    throw new Error("子类必须实现 getFileContent()");
+  }
+  /** 提交对比: 返回 [{filename, status, sha}] */
+  async compareCommits(baseRef, headRef) {
+    throw new Error("子类必须实现 compareCommits()");
+  }
+  /** 列提交(同步历史用): query={sha, path, since, until, perPage, page} */
+  async listCommits(query) {
+    throw new Error("子类必须实现 listCommits()");
+  }
+  /** 分支首提交(首次同步的候选基准): 返回 {sha, treeSha, date} 或 null */
+  async getInitialCommit() {
+    throw new Error("子类必须实现 getInitialCommit()");
+  }
+  /** 合并基(可用于基准重建);平台不支持时返回 null */
+  async getMergeBase(leftSha, rightSha) {
+    return null;
+  }
+  // ---------- 写入契约 ----------
+  async createBlob(bytes, encoding = "base64") {
+    throw new Error("子类必须实现 createBlob()");
+  }
+  /** entries: [{path, mode, type:"blob", sha}] ;sha 为 null 表示删除 */
+  async createTree(baseTreeSha, entries) {
+    throw new Error("子类必须实现 createTree()");
+  }
+  async createCommit({ message, treeSha, parents }) {
+    throw new Error("子类必须实现 createCommit()");
+  }
+  /**
+   * 更新分支引用(安全流程):
+   * 1. force 固定 false;
+   * 2. 更新前二次读取远端 HEAD,与 expectedHead 不一致 → REMOTE_CHANGED(不写入);
+   * 3. 更新被拒(非快进) → PUSH_REJECTED;
+   * 4. 成功后回读 HEAD,不等于新提交 → REMOTE_CHANGED(不更新任何本地基准)。
+   * @returns {Promise<{confirmedSha:string}>}
+   */
+  async updateBranchRef(newSha, { expectedHead } = {}) {
+    if (!expectedHead) {
+      throw new SyncError({
+        category: SyncErrorCategory.GIT,
+        code: "MISSING_EXPECTED_HEAD",
+        operation: "updateBranchRef",
+        message: "缺少 expectedHead,拒绝更新远端引用",
+        retryable: false,
+        recoverable: false
+      });
+    }
+    const observed = await this.getBranchHead();
+    if (observed.sha !== expectedHead) {
+      throw new SyncError({
+        category: SyncErrorCategory.REMOTE_CHANGED,
+        code: "REMOTE_HEAD_MOVED",
+        operation: "updateBranchRef",
+        message: "远端分支已变化(期望 " + expectedHead.slice(0, 8) + ",实际 " + observed.sha.slice(0, 8) + "),本次不写入",
+        retryable: true,
+        recoverable: false
+      });
+    }
+    await this._updateRefRaw(newSha);
+    const confirmed = await this.getBranchHead();
+    if (confirmed.sha !== newSha) {
+      throw new SyncError({
+        category: SyncErrorCategory.REMOTE_CHANGED,
+        code: "CONFIRM_FAILED",
+        operation: "updateBranchRef",
+        message: "远端引用回读不一致,提交未确认",
+        retryable: false,
+        recoverable: false
+      });
+    }
+    return { confirmedSha: confirmed.sha };
+  }
+  /** 平台原生引用更新(子类实现;失败抛 HTTP 层 SyncError) */
+  async _updateRefRaw(newSha) {
+    throw new Error("子类必须实现 _updateRefRaw()");
+  }
+  /**
+   * 空仓库首推: 创建分支引用并回读确认。
+   * 与 updateBranchRef 同级的安全契约,仅当远端确认分支不存在时使用。
+   */
+  async ensureBranchRef(commitSha) {
+    try {
+      await this._createRefRaw(commitSha);
+    } catch (err) {
+      if (err instanceof SyncError && (err.httpStatus === 409 || err.httpStatus === 422)) {
+        throw new SyncError({
+          category: SyncErrorCategory.REMOTE_CHANGED,
+          code: "REMOTE_HEAD_MOVED",
+          operation: "ensureBranchRef",
+          message: "创建分支引用时远端分支已存在(疑似竞争),本轮不写入",
+          retryable: true,
+          recoverable: false,
+          cause: err
+        });
+      }
+      throw err;
+    }
+    const confirmed = await this.getBranchHead();
+    if (confirmed.sha !== commitSha) {
+      throw new SyncError({
+        category: SyncErrorCategory.REMOTE_CHANGED,
+        code: "CONFIRM_FAILED",
+        operation: "ensureBranchRef",
+        message: "分支引用创建后回读不一致,提交未确认",
+        retryable: false,
+        recoverable: false
+      });
+    }
+    return { confirmedSha: confirmed.sha };
+  }
+  /** 平台原生引用创建(子类实现) */
+  async _createRefRaw(commitSha) {
+    throw new Error("子类必须实现 _createRefRaw()");
+  }
+  // ---------- 写入失败语义 ----------
+  mapUpdateRefFailure(err) {
+    const status = err && err.httpStatus || 0;
+    if (status === 409 || status === 422) {
+      return new SyncError({
+        category: SyncErrorCategory.PUSH_REJECTED,
+        code: "NON_FAST_FORWARD",
+        operation: "updateBranchRef",
+        httpStatus: status,
+        message: "远端分支已前移,本次提交未写入(force=false,不覆盖远端)",
+        detail: err && err.detail || "",
+        retryable: true,
+        recoverable: false,
+        cause: err
+      });
+    }
+    return err;
+  }
+  /** 统一错误包装: 保留底层 SyncError,其余按 operation 归类 */
+  wrapError(err, operation, message) {
+    if (err instanceof SyncError) return err;
+    return new SyncError({
+      category: SyncErrorCategory.GIT,
+      operation,
+      message: message || err && err.message || String(err),
+      detail: String(err && err.message || err),
+      cause: err
+    });
+  }
+};
+// ---------- 编码与内容等价 ----------
+__publicField(_GitProvider, "encoder", new TextEncoder());
+__publicField(_GitProvider, "decoder", new TextDecoder("utf-8", { fatal: false }));
+var GitProvider = _GitProvider;
+
+// src/git/github-provider.js
+var GitHubProvider = class _GitHubProvider extends GitProvider {
+  constructor(opts) {
+    super(Object.assign({ platform: "github" }, opts));
+  }
+  baseUrl() {
+    return "https://api.github.com";
+  }
+  displayName() {
+    return "GitHub";
+  }
+  _repoPath() {
+    return "/repos/" + this.owner + "/" + this.repo;
+  }
+  _wrap(err, operation, message) {
+    if (err instanceof SyncError) return err;
+    const status = err && err.httpStatus || 0;
+    return new SyncError({
+      category: status === 404 ? SyncErrorCategory.REPOSITORY : SyncErrorCategory.GIT,
+      operation,
+      httpStatus: status,
+      message: message || err && err.message || String(err),
+      detail: String(err && err.detail || err && err.message || err),
+      retryable: status >= 500,
+      recoverable: false,
+      cause: err
+    });
+  }
+  static _mapCommit(data) {
+    return {
+      sha: data.sha,
+      treeSha: data.commit && data.commit.tree && data.commit.tree.sha,
+      message: data.commit && data.commit.message || "",
+      author: data.commit && data.commit.author && data.commit.author.name || "",
+      email: data.commit && data.commit.author && data.commit.author.email || "",
+      date: data.commit && data.commit.author && data.commit.author.date || "",
+      parents: (data.parents || []).map((p) => p.sha)
+    };
+  }
+  async getBranchHead() {
+    try {
+      const res = await this.http.request({ path: this._repoPath() + "/git/ref/heads/" + this.branch });
+      return { sha: res.data.object.sha };
+    } catch (err) {
+      throw this._wrap(err, "getBranchHead", "读取分支 HEAD 失败");
+    }
+  }
+  async getCommit(shaOrRef) {
+    try {
+      const res = await this.http.request({ path: this._repoPath() + "/commits/" + encodeURIComponent(shaOrRef) });
+      return _GitHubProvider._mapCommit(res.data);
+    } catch (err) {
+      throw this._wrap(err, "getCommit", "读取提交失败(" + shaOrRef + ")");
+    }
+  }
+  async getTree(treeSha) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/git/trees/" + treeSha,
+        query: { recursive: "1" }
+      });
+      return (res.data.tree || []).map((t) => ({
+        path: t.path,
+        mode: t.mode,
+        type: t.type,
+        sha: t.sha,
+        size: t.size || 0
+      }));
+    } catch (err) {
+      throw this._wrap(err, "getTree", "读取远端目录树失败");
+    }
+  }
+  async getBlob(blobSha) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/git/blobs/" + blobSha,
+        responseType: "json"
+      });
+      const b64 = res.data.content || "";
+      return {
+        sha: res.data.sha,
+        size: res.data.size,
+        contentBase64: b64,
+        bytes: GitProvider.base64ToBytes(b64)
+      };
+    } catch (err) {
+      throw this._wrap(err, "getBlob", "读取远端文件内容失败");
+    }
+  }
+  async getFileContent(path, ref) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/contents/" + encodePath(path),
+        query: { ref },
+        headers: { Accept: "application/vnd.github.raw+json, application/json" },
+        responseType: "json"
+      });
+      const data = res.data;
+      if (typeof data === "string") {
+        const bytes2 = GitProvider.textToBytes(data);
+        return { sha: "", size: bytes2.length, contentBase64: GitProvider.bytesToBase64(bytes2), bytes: bytes2, text: data };
+      }
+      const b64 = data.content || "";
+      const bytes = GitProvider.base64ToBytes(b64);
+      return { sha: data.sha, size: data.size, contentBase64: b64, bytes, text: GitProvider.bytesToText(bytes) };
+    } catch (err) {
+      if (err instanceof SyncError && err.httpStatus === 404) {
+        const notFound = new SyncError({
+          category: SyncErrorCategory.GIT,
+          code: "FILE_NOT_FOUND",
+          operation: "getFileContent",
+          httpStatus: 404,
+          path,
+          message: "远端文件不存在: " + path,
+          retryable: false,
+          recoverable: true,
+          cause: err
+        });
+        throw notFound;
+      }
+      throw this._wrap(err, "getFileContent", "读取远端文件失败(" + path + ")");
+    }
+  }
+  async compareCommits(baseRef, headRef) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/compare/" + encodeURIComponent(baseRef) + "..." + encodeURIComponent(headRef)
+      });
+      return (res.data.files || []).map((f) => ({
+        filename: f.filename,
+        status: f.status,
+        sha: f.sha
+      }));
+    } catch (err) {
+      throw this._wrap(err, "compareCommits", "提交对比失败");
+    }
+  }
+  async listCommits(query = {}) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/commits",
+        query: {
+          sha: query.sha,
+          path: query.path,
+          since: query.since,
+          until: query.until,
+          per_page: query.perPage,
+          page: query.page
+        }
+      });
+      return (res.data || []).map((c) => Object.assign(_GitHubProvider._mapCommit(c), {}));
+    } catch (err) {
+      throw this._wrap(err, "listCommits", "读取提交列表失败");
+    }
+  }
+  /**
+   * 分支首提交: listCommits per_page=1 后按 Link 头跳到最后一页。
+   * 无提交(空仓库)返回 null。
+   */
+  async getInitialCommit() {
+    try {
+      const first = await this.http.request({
+        path: this._repoPath() + "/commits",
+        query: { sha: this.branch, per_page: 1, page: 1 }
+      });
+      if (!Array.isArray(first.data) || first.data.length === 0) return null;
+      const lastPage = parseLinkLastPage(first.link) || 1;
+      if (lastPage <= 1) return _GitHubProvider._mapCommit(first.data[0]);
+      const last = await this.http.request({
+        path: this._repoPath() + "/commits",
+        query: { sha: this.branch, per_page: 1, page: lastPage }
+      });
+      return _GitHubProvider._mapCommit(last.data[0]);
+    } catch (err) {
+      throw this._wrap(err, "getInitialCommit", "读取分支首个提交失败");
+    }
+  }
+  async getMergeBase(leftSha, rightSha) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/compare/" + encodeURIComponent(leftSha) + "..." + encodeURIComponent(rightSha)
+      });
+      const mb = res.data.merge_base_commit;
+      return mb && mb.sha ? mb.sha : null;
+    } catch (err) {
+      return null;
+    }
+  }
+  async createBlob(bytes) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/git/blobs",
+        method: "POST",
+        body: { content: GitProvider.bytesToBase64(bytes), encoding: "base64" }
+      });
+      return res.data.sha;
+    } catch (err) {
+      throw this._wrap(err, "createBlob", "上传文件内容(Blob)失败");
+    }
+  }
+  async createTree(baseTreeSha, entries) {
+    try {
+      const body = { tree: entries.map((e) => ({ path: e.path, mode: e.mode || "100644", type: "blob", sha: e.sha })) };
+      if (baseTreeSha) body.base_tree = baseTreeSha;
+      const res = await this.http.request({
+        path: this._repoPath() + "/git/trees",
+        method: "POST",
+        body
+      });
+      return { sha: res.data.sha };
+    } catch (err) {
+      throw this._wrap(err, "createTree", "创建远端目录树失败");
+    }
+  }
+  async createCommit({ message, treeSha, parents }) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/git/commits",
+        method: "POST",
+        body: { message, tree: treeSha, parents }
+      });
+      return { sha: res.data.sha };
+    } catch (err) {
+      throw this._wrap(err, "createCommit", "创建远端提交失败");
+    }
+  }
+  async _updateRefRaw(newSha) {
+    try {
+      await this.http.request({
+        path: this._repoPath() + "/git/refs/heads/" + this.branch,
+        method: "PATCH",
+        body: { sha: newSha, force: false }
+      });
+    } catch (err) {
+      throw this.mapUpdateRefFailure(err);
+    }
+  }
+  /** 空仓库首推: 创建分支引用 */
+  async _createRefRaw(commitSha) {
+    await this.http.request({
+      path: this._repoPath() + "/git/refs",
+      method: "POST",
+      body: { ref: "refs/heads/" + this.branch, sha: commitSha }
+    });
+  }
+};
+function parseLinkLastPage(linkHeader) {
+  if (!linkHeader) return 0;
+  const m = /[?&]page=(\d+)>;\s*rel="last"/.exec(linkHeader);
+  return m ? Number(m[1]) : 0;
+}
+function encodePath(path) {
+  return String(path).split("/").map((seg) => encodeURIComponent(seg)).join("/");
+}
+
+// src/git/gitee-provider.js
+var GiteeProvider = class _GiteeProvider extends GitProvider {
+  constructor(opts) {
+    super(Object.assign({ platform: "gitee" }, opts));
+  }
+  baseUrl() {
+    return "https://gitee.com/api/v5";
+  }
+  displayName() {
+    return "Gitee";
+  }
+  _repoPath() {
+    return "/repos/" + this.owner + "/" + this.repo;
+  }
+  _wrap(err, operation, message) {
+    if (err instanceof SyncError) return err;
+    const status = err && err.httpStatus || 0;
+    return new SyncError({
+      category: status === 404 ? SyncErrorCategory.REPOSITORY : SyncErrorCategory.GIT,
+      operation,
+      httpStatus: status,
+      message: message || err && err.message || String(err),
+      detail: String(err && err.detail || err && err.message || err),
+      retryable: status >= 500,
+      recoverable: false,
+      cause: err
+    });
+  }
+  static _mapCommit(data) {
+    return {
+      sha: data.sha,
+      treeSha: data.commit && data.commit.tree && data.commit.tree.sha,
+      message: data.commit && data.commit.message || "",
+      author: data.commit && data.commit.author && data.commit.author.name || "",
+      email: data.commit && data.commit.author && data.commit.author.email || "",
+      date: data.commit && data.commit.author && data.commit.author.date || "",
+      parents: (data.parents || []).map((p) => p.sha)
+    };
+  }
+  async getBranchHead() {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/branches/" + encodeURIComponent(this.branch)
+      });
+      const sha = res.data && res.data.commit && res.data.commit.sha;
+      if (!sha) throw new Error("分支响应缺少 commit.sha");
+      return { sha };
+    } catch (err) {
+      throw this._wrap(err, "getBranchHead", "读取分支 HEAD 失败");
+    }
+  }
+  async getCommit(shaOrRef) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/commits/" + encodeURIComponent(shaOrRef)
+      });
+      return _GiteeProvider._mapCommit(res.data);
+    } catch (err) {
+      throw this._wrap(err, "getCommit", "读取提交失败(" + shaOrRef + ")");
+    }
+  }
+  async getTree(treeSha) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/git/trees/" + treeSha,
+        query: { recursive: 1 }
+      });
+      return (res.data.tree || res.data || []).map((t) => ({
+        path: t.path,
+        mode: t.mode,
+        type: t.type,
+        sha: t.sha,
+        size: t.size || 0
+      }));
+    } catch (err) {
+      throw this._wrap(err, "getTree", "读取远端目录树失败");
+    }
+  }
+  async getBlob(blobSha) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/git/blobs/" + blobSha
+      });
+      const b64 = res.data.content || "";
+      return {
+        sha: res.data.sha,
+        size: res.data.size,
+        contentBase64: b64,
+        bytes: GitProvider.base64ToBytes(b64)
+      };
+    } catch (err) {
+      throw this._wrap(err, "getBlob", "读取远端文件内容失败");
+    }
+  }
+  async getFileContent(path, ref) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/contents/" + encodePath(path),
+        query: { ref }
+      });
+      const data = res.data;
+      const b64 = data && data.content || "";
+      const bytes = GitProvider.base64ToBytes(b64);
+      return {
+        sha: data.sha,
+        size: data.size,
+        contentBase64: b64,
+        bytes,
+        text: GitProvider.bytesToText(bytes)
+      };
+    } catch (err) {
+      if (err instanceof SyncError && err.httpStatus === 404) {
+        throw new SyncError({
+          category: SyncErrorCategory.GIT,
+          code: "FILE_NOT_FOUND",
+          operation: "getFileContent",
+          httpStatus: 404,
+          path,
+          message: "远端文件不存在: " + path,
+          retryable: false,
+          recoverable: true,
+          cause: err
+        });
+      }
+      throw this._wrap(err, "getFileContent", "读取远端文件失败(" + path + ")");
+    }
+  }
+  async compareCommits(baseRef, headRef) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/compare",
+        query: { base: baseRef, head: headRef }
+      });
+      return (res.data.files || []).map((f) => ({ filename: f.filename, status: f.status, sha: f.sha }));
+    } catch (err) {
+      if (err instanceof SyncError && err.httpStatus === 404) return [];
+      throw this._wrap(err, "compareCommits", "提交对比失败");
+    }
+  }
+  async listCommits(query = {}) {
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/commits",
+        query: {
+          sha: query.sha,
+          path: query.path,
+          since: query.since,
+          until: query.until,
+          per_page: query.perPage,
+          page: query.page
+        }
+      });
+      return (res.data || []).map((c) => _GiteeProvider._mapCommit(c));
+    } catch (err) {
+      throw this._wrap(err, "listCommits", "读取提交列表失败");
+    }
+  }
+  /** Gitee: listCommits 响应头含 total_page/total_count,首提交取最后一页 */
+  async getInitialCommit() {
+    try {
+      const first = await this.http.request({
+        path: this._repoPath() + "/commits",
+        query: { sha: this.branch, per_page: 1, page: 1 }
+      });
+      if (!Array.isArray(first.data) || first.data.length === 0) return null;
+      let lastPage = 1;
+      if (first.headers && typeof first.headers.get === "function") {
+        const tp = Number(first.headers.get("total_page"));
+        const tc = Number(first.headers.get("total_count"));
+        lastPage = !isNaN(tp) && tp > 0 ? tp : !isNaN(tc) && tc > 0 ? tc : 1;
+      }
+      if (lastPage <= 1) return _GiteeProvider._mapCommit(first.data[0]);
+      const last = await this.http.request({
+        path: this._repoPath() + "/commits",
+        query: { sha: this.branch, per_page: 1, page: lastPage }
+      });
+      return _GiteeProvider._mapCommit(last.data[0]);
+    } catch (err) {
+      throw this._wrap(err, "getInitialCommit", "读取分支首个提交失败");
+    }
+  }
+  // ---------- 写入: 逐文件 contents API ----------
+  /** 单文件创建/更新。existingSha 为空表示创建,否则更新 */
+  async putFileContent(path, bytes, { message, branch, existingSha }) {
+    const body = {
+      content: GitProvider.bytesToBase64(bytes),
+      branch: branch || this.branch,
+      message: message || "sync: update " + path
+    };
+    if (existingSha) body.sha = existingSha;
+    try {
+      const res = await this.http.request({
+        path: this._repoPath() + "/contents/" + encodePath(path),
+        method: existingSha ? "PUT" : "POST",
+        body
+      });
+      const commit = res.data && res.data.commit;
+      return { path, sha: res.data && res.data.content && res.data.content.sha, commitSha: commit && commit.sha };
+    } catch (err) {
+      if (err instanceof SyncError && err.httpStatus === 404 && existingSha) {
+        throw new SyncError({
+          category: SyncErrorCategory.REMOTE_CHANGED,
+          code: "TARGET_GONE",
+          operation: "putFileContent",
+          httpStatus: 404,
+          path,
+          message: "远端文件在写入前已不存在: " + path,
+          retryable: true,
+          recoverable: false,
+          cause: err
+        });
+      }
+      if (err instanceof SyncError && (err.httpStatus === 409 || err.httpStatus === 422)) {
+        throw new SyncError({
+          category: SyncErrorCategory.REMOTE_CHANGED,
+          code: "NON_FAST_FORWARD",
+          operation: "putFileContent",
+          httpStatus: err.httpStatus,
+          path,
+          message: "远端已更新,写入被拒绝: " + path,
+          retryable: true,
+          recoverable: false,
+          cause: err
+        });
+      }
+      throw this._wrap(err, "putFileContent", "远端文件写入失败(" + path + ")");
+    }
+  }
+  /** 单文件删除 */
+  async deleteFileContent(path, { message, branch, sha }) {
+    try {
+      await this.http.request({
+        path: this._repoPath() + "/contents/" + encodePath(path),
+        method: "DELETE",
+        query: { sha, branch: branch || this.branch, message: message || "sync: delete " + path },
+        body: { sha, branch: branch || this.branch, message: message || "sync: delete " + path }
+      });
+      return { path };
+    } catch (err) {
+      if (err instanceof SyncError && err.httpStatus === 404) {
+        throw new SyncError({
+          category: SyncErrorCategory.REMOTE_CHANGED,
+          code: "TARGET_GONE",
+          operation: "deleteFileContent",
+          httpStatus: 404,
+          path,
+          message: "远端文件已不存在,无需删除: " + path,
+          retryable: true,
+          recoverable: false,
+          cause: err
+        });
+      }
+      throw this._wrap(err, "deleteFileContent", "远端文件删除失败(" + path + ")");
+    }
+  }
+  /**
+   * 原子能力声明: Gitee 无服务端 CAS,拒绝走 updateRef 契约,
+   * 引擎据此选择逐文件写入 + 操作日志路径。
+   */
+  async _updateRefRaw() {
+    throw new SyncError({
+      category: SyncErrorCategory.GIT,
+      code: "ATOMIC_WRITE_UNSUPPORTED",
+      operation: "updateBranchRef",
+      message: "Gitee 不支持原子引用更新,请使用逐文件写入路径",
+      retryable: false,
+      recoverable: false
+    });
+  }
+  /**
+   * 执行逐文件操作序列(确定性顺序,不并行)。
+   * @param {Array<{op:"create"|"update"|"delete", path, bytes?, remoteSha?}>} operations
+   * @param {object} opts {message, branch}
+   * @returns {Promise<{operations:Array, partialFailure:SyncError|null}>}
+   *   任一失败时: 已完成的操作保留在日志中,错误抛出 PARTIAL_REMOTE_WRITE。
+   */
+  async applyFileOperations(operations, { message, branch } = {}) {
+    const log = [];
+    let headBefore = { sha: "" };
+    try {
+      headBefore = await this.getBranchHead();
+    } catch (err) {
+      if (!(err instanceof SyncError && err.httpStatus === 404)) throw err;
+    }
+    for (const op of operations) {
+      const entry = {
+        op: op.op,
+        path: op.path,
+        beforeSha: op.remoteSha || null,
+        afterSha: null,
+        headBefore: headBefore.sha,
+        headAfter: null,
+        at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      try {
+        if (op.op === "delete") {
+          await this.deleteFileContent(op.path, { message, branch, sha: op.remoteSha });
+        } else {
+          const result = await this.putFileContent(op.path, op.bytes, {
+            message,
+            branch,
+            existingSha: op.op === "update" ? op.remoteSha : void 0
+          });
+          entry.afterSha = result.sha;
+          entry.commitSha = result.commitSha;
+        }
+      } catch (err) {
+        entry.error = err && err.message || String(err);
+        log.push(entry);
+        const headAfter2 = await this.getBranchHead().catch(() => ({ sha: "" }));
+        for (const e of log) e.headAfter = headAfter2.sha;
+        throw new SyncError({
+          category: SyncErrorCategory.GIT,
+          code: "PARTIAL_REMOTE_WRITE",
+          operation: "applyFileOperations",
+          path: op.path,
+          message: "远端写入中途失败(" + log.length + "/" + operations.length + " 已完成),本轮不标记成功: " + op.path,
+          detail: JSON.stringify(log).slice(0, 2e3),
+          retryable: false,
+          recoverable: true,
+          cause: err
+        });
+      }
+      log.push(entry);
+    }
+    const headAfter = await this.getBranchHead().catch(() => ({ sha: "" }));
+    for (const e of log) e.headAfter = headAfter.sha;
+    return { operations: log, partialFailure: null, remoteHead: headAfter.sha };
+  }
+};
+
+// src/sync/sync-planner.js
+var PlanAction = Object.freeze({
+  UPLOAD_CREATE: "upload_create",
+  UPLOAD_UPDATE: "upload_update",
+  DOWNLOAD_CREATE: "download_create",
+  DOWNLOAD_UPDATE: "download_update",
+  DELETE_REMOTE: "delete_remote",
+  DELETE_LOCAL: "delete_local",
+  MERGE: "merge",
+  CONFLICT: "conflict",
+  SKIP: "skip"
+});
+var SyncPlanner = class {
+  constructor(deps) {
+    this.readLocal = deps.readLocal;
+    this.readRemoteBlobBySha = deps.readRemoteBlobBySha;
+    this.guardLocalDelete = deps.guardLocalDelete || null;
+  }
+  /**
+   * @param {object} opts {baseEntries, remoteEntries, localFiles, localShas,
+   *   mode:"auto"|"remote_over_local"|"local_over_remote",
+   *   overrides:Map<path,"keep_local"|"keep_remote">, enumErrorOccurred}
+   * @returns {Promise<object>} plan
+   */
+  async build(opts) {
+    const {
+      baseEntries = /* @__PURE__ */ new Map(),
+      remoteEntries = /* @__PURE__ */ new Map(),
+      localFiles = [],
+      localShas = /* @__PURE__ */ new Map(),
+      mode = "auto",
+      overrides = /* @__PURE__ */ new Map(),
+      enumErrorOccurred = false
+    } = opts;
+    const localSet = new Set(localFiles.map((f) => f.path));
+    const allPaths = /* @__PURE__ */ new Set([...baseEntries.keys(), ...remoteEntries.keys(), ...localSet]);
+    const plan = {
+      uploads: [],
+      // {path, bytes, op:"create"|"update"}
+      downloads: [],
+      // {path, op:"create"|"update"}
+      deletionsRemote: [],
+      // {path, remoteSha}
+      deletionsLocal: [],
+      // {path}
+      merges: [],
+      // {path, baseSha, remoteSha}
+      conflicts: [],
+      // {path, reason, baseSha, localSha, remoteSha}
+      skippedDeletes: [],
+      // {path, reasons}
+      unchanged: 0
+    };
+    for (const path of allPaths) {
+      const override = overrides.get(path);
+      if (override) {
+        this._applyOverride(plan, path, override, {
+          baseEntry: baseEntries.get(path),
+          remoteEntry: remoteEntries.get(path),
+          localExists: localSet.has(path),
+          localShas
+        });
+        continue;
+      }
+      if (mode === "remote_over_local") {
+        this._applyOverride(plan, path, "keep_remote", {
+          baseEntry: baseEntries.get(path),
+          remoteEntry: remoteEntries.get(path),
+          localExists: localSet.has(path),
+          localShas
+        });
+        continue;
+      }
+      if (mode === "local_over_remote") {
+        this._applyOverride(plan, path, "keep_local", {
+          baseEntry: baseEntries.get(path),
+          remoteEntry: remoteEntries.get(path),
+          localExists: localSet.has(path),
+          localShas
+        });
+        continue;
+      }
+      await this._decideAuto(plan, path, {
+        baseEntry: baseEntries.get(path),
+        remoteEntry: remoteEntries.get(path),
+        localExists: localSet.has(path),
+        localShas,
+        enumErrorOccurred,
+        bootstrap: opts.bootstrap === true
+      });
+    }
+    return plan;
+  }
+  /** 状态三值: absent | unchanged | changed | deleted(local/remote 语义化) */
+  _stateOf({ exists, sha, refSha }) {
+    if (!exists) return "deleted";
+    if (!refSha) return "new";
+    if (sha && refSha && sha === refSha) return "unchanged";
+    return "changed";
+  }
+  async _localState(path, { baseEntry, remoteEntry, localExists, localShas }) {
+    if (!localExists) return "deleted";
+    if (!baseEntry) return "new";
+    const sha = localShas.get(path);
+    const ref = baseEntry ? baseEntry.sha : remoteEntry ? remoteEntry.sha : null;
+    if (sha === null || sha === void 0) {
+      const bytes = await this.readLocal(path) || { bytes: null };
+      if (!bytes) return "deleted";
+      const refBytes = baseEntry ? await this.readRemoteBlobBySha(baseEntry.sha) : remoteEntry ? await this.readRemoteBlobBySha(remoteEntry.sha) : null;
+      return refBytes && bytesEqual(refBytes.bytes, bytes.bytes) ? "unchanged" : "changed";
+    }
+    return this._stateOf({ exists: true, sha, refSha: ref });
+  }
+  async _decideAuto(plan, path, ctx) {
+    const { baseEntry, remoteEntry, localExists, localShas, enumErrorOccurred, bootstrap } = ctx;
+    const localState = await this._localState(path, ctx);
+    const remoteState = !remoteEntry ? "deleted" : !baseEntry ? "new" : remoteEntry.sha === baseEntry.sha ? "unchanged" : "changed";
+    if (localState === "deleted" && remoteState === "deleted") {
+      plan.unchanged += 1;
+      return;
+    }
+    if (localState === "unchanged" && remoteState === "unchanged") {
+      plan.unchanged += 1;
+      return;
+    }
+    if (localState === "unchanged" && remoteState === "new") {
+      plan.unchanged += 1;
+      return;
+    }
+    if (localState === "new" && remoteState === "deleted") {
+      plan.uploads.push({ path, op: "create" });
+      return;
+    }
+    if (localState === "deleted" && remoteState === "new") {
+      plan.downloads.push({ path, op: "create" });
+      return;
+    }
+    if (localState === "new" && remoteState === "new") {
+      const localSha = localShas.get(path);
+      if (localSha && localSha === remoteEntry.sha) {
+        plan.unchanged += 1;
+        return;
+      }
+      plan.conflicts.push({ path, reason: "双方同时新增了不同内容", baseSha: null, localSha, remoteSha: remoteEntry.sha });
+      return;
+    }
+    if (localState === "unchanged" && remoteState === "changed") {
+      plan.downloads.push({ path, op: "update" });
+      return;
+    }
+    if (localState === "changed" && remoteState === "unchanged") {
+      plan.uploads.push({ path, op: "update" });
+      return;
+    }
+    if (localState === "changed" && remoteState === "changed") {
+      const localSha = localShas.get(path);
+      if (localSha && localSha === remoteEntry.sha) {
+        plan.uploads.push({ path, op: "update" });
+        return;
+      }
+      if (isMergeable(path)) {
+        plan.merges.push({ path, baseSha: baseEntry.sha, remoteSha: remoteEntry.sha });
+      } else {
+        plan.conflicts.push({ path, reason: "二进制/超大文件无法自动合并", baseSha: baseEntry.sha, localSha, remoteSha: remoteEntry.sha });
+      }
+      return;
+    }
+    if (localState === "deleted" && remoteState === "unchanged") {
+      if (bootstrap) {
+        plan.downloads.push({ path, op: "create" });
+        return;
+      }
+      const guard = this.guardLocalDelete ? await this.guardLocalDelete(path) : { allow: true, reasons: [] };
+      if (!guard.allow || enumErrorOccurred) {
+        plan.skippedDeletes.push({ path, reasons: enumErrorOccurred ? guard.reasons.concat(["枚举异常"]) : guard.reasons });
+        return;
+      }
+      plan.deletionsRemote.push({ path, remoteSha: remoteEntry.sha });
+      return;
+    }
+    if (localState === "deleted" && remoteState === "changed") {
+      plan.conflicts.push({ path, reason: "本地删除但远端有修改", baseSha: baseEntry.sha, localSha: null, remoteSha: remoteEntry.sha });
+      return;
+    }
+    if (localState === "unchanged" && remoteState === "deleted") {
+      plan.deletionsLocal.push({ path });
+      return;
+    }
+    if (localState === "changed" && remoteState === "deleted") {
+      plan.conflicts.push({ path, reason: "本地有修改但远端已删除", baseSha: baseEntry.sha, localSha: localShas.get(path), remoteSha: null });
+      return;
+    }
+    plan.conflicts.push({ path, reason: "未知状态组合: local=" + localState + " remote=" + remoteState, baseSha: baseEntry ? baseEntry.sha : null, localSha: localShas.get(path) || null, remoteSha: remoteEntry ? remoteEntry.sha : null });
+  }
+  /**
+   * 用户显式决策/强制方向: 覆盖三方矩阵。
+   * 「接受本地/远端」不是无条件覆盖: 仍受删除守卫与枚举异常约束。
+   */
+  _applyOverride(plan, path, decision, { baseEntry, remoteEntry, localExists, localShas }) {
+    if (decision === "keep_local") {
+      if (localExists) {
+        const sha = localShas.get(path);
+        const sameAsRemote = sha && remoteEntry && sha === remoteEntry.sha;
+        if (sameAsRemote) {
+          plan.unchanged += 1;
+          return;
+        }
+        plan.uploads.push({ path, op: baseEntry ? "update" : "create" });
+      } else if (remoteEntry) {
+        plan.deletionsRemote.push({ path, remoteSha: remoteEntry.sha });
+      } else {
+        plan.unchanged += 1;
+      }
+      return;
+    }
+    if (decision === "keep_remote") {
+      if (remoteEntry) {
+        const sha = localShas.get(path);
+        const sameAsRemote = localExists && sha && sha === remoteEntry.sha;
+        if (sameAsRemote) {
+          plan.unchanged += 1;
+          return;
+        }
+        plan.downloads.push({ path, op: localExists ? "update" : "create" });
+      } else if (localExists) {
+        plan.deletionsLocal.push({ path });
+      } else {
+        plan.unchanged += 1;
+      }
+      return;
+    }
+    throw new SyncError({
+      category: SyncErrorCategory.UNKNOWN,
+      code: "BAD_OVERRIDE",
+      operation: "plan",
+      path,
+      message: "未知的覆盖决策: " + decision,
+      retryable: false,
+      recoverable: false
+    });
+  }
+};
+function isMergeable(path) {
+  return !/\.(zip|tar|gz|rar|7z|exe|dll|so|dylib|png|jpe?g|gif|webp|mp4|mov|avi|mkv|mp3|wav|flac|pdf|docx?|xlsx?|pptx?|sqlite|db)$/i.test(path);
+}
+function bytesEqual(a, b) {
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// node_modules/node-diff3/dist/diff3.mjs
+function LCS(buffer1, buffer2) {
+  let equivalenceClasses = /* @__PURE__ */ Object.create(null);
+  for (let j = 0; j < buffer2.length; j++) {
+    const item = buffer2[j];
+    if (equivalenceClasses[item]) {
+      equivalenceClasses[item].push(j);
+    } else {
+      equivalenceClasses[item] = [j];
+    }
+  }
+  const NULLRESULT = { buffer1index: -1, buffer2index: -1, chain: null };
+  let candidates = [NULLRESULT];
+  for (let i = 0; i < buffer1.length; i++) {
+    const item = buffer1[i];
+    const buffer2indices = equivalenceClasses[item] || [];
+    let r = 0;
+    let c = candidates[0];
+    for (const j of buffer2indices) {
+      let s;
+      for (s = r; s < candidates.length; s++) {
+        if (candidates[s].buffer2index < j && (s === candidates.length - 1 || candidates[s + 1].buffer2index > j)) {
+          break;
+        }
+      }
+      if (s < candidates.length) {
+        const newCandidate = { buffer1index: i, buffer2index: j, chain: candidates[s] };
+        if (r === candidates.length) {
+          candidates.push(c);
+        } else {
+          candidates[r] = c;
+        }
+        r = s + 1;
+        c = newCandidate;
+        if (r === candidates.length) {
+          break;
+        }
+      }
+    }
+    candidates[r] = c;
+  }
+  return candidates[candidates.length - 1];
+}
+function diffIndices(buffer1, buffer2) {
+  const lcs = LCS(buffer1, buffer2);
+  let result = [];
+  let tail1 = buffer1.length;
+  let tail2 = buffer2.length;
+  for (let candidate = lcs; candidate !== null; candidate = candidate.chain) {
+    const mismatchLength1 = tail1 - candidate.buffer1index - 1;
+    const mismatchLength2 = tail2 - candidate.buffer2index - 1;
+    tail1 = candidate.buffer1index;
+    tail2 = candidate.buffer2index;
+    if (mismatchLength1 || mismatchLength2) {
+      result.push({
+        buffer1: [tail1 + 1, mismatchLength1],
+        buffer1Content: buffer1.slice(tail1 + 1, tail1 + 1 + mismatchLength1),
+        buffer2: [tail2 + 1, mismatchLength2],
+        buffer2Content: buffer2.slice(tail2 + 1, tail2 + 1 + mismatchLength2)
+      });
+    }
+  }
+  result.reverse();
+  return result;
+}
+function diff3MergeRegions(a, o, b) {
+  let hunks = [];
+  function addHunk(h, ab) {
+    hunks.push({
+      ab,
+      oStart: h.buffer1[0],
+      oLength: h.buffer1[1],
+      abStart: h.buffer2[0],
+      abLength: h.buffer2[1]
+    });
+  }
+  diffIndices(o, a).forEach((item) => addHunk(item, "a"));
+  diffIndices(o, b).forEach((item) => addHunk(item, "b"));
+  hunks.sort((x, y) => x.oStart - y.oStart);
+  let results = [];
+  let currOffset = 0;
+  function advanceTo(endOffset) {
+    if (endOffset > currOffset) {
+      results.push({
+        stable: true,
+        buffer: "o",
+        bufferStart: currOffset,
+        bufferLength: endOffset - currOffset,
+        bufferContent: o.slice(currOffset, endOffset)
+      });
+      currOffset = endOffset;
+    }
+  }
+  while (hunks.length) {
+    let hunk = hunks.shift();
+    let regionStart = hunk.oStart;
+    let regionEnd = hunk.oStart + hunk.oLength;
+    let regionHunks = [hunk];
+    advanceTo(regionStart);
+    while (hunks.length) {
+      const nextHunk = hunks[0];
+      const nextHunkStart = nextHunk.oStart;
+      if (nextHunkStart > regionEnd)
+        break;
+      regionEnd = Math.max(regionEnd, nextHunkStart + nextHunk.oLength);
+      regionHunks.push(hunks.shift());
+    }
+    if (regionHunks.length === 1) {
+      if (hunk.abLength > 0) {
+        const buffer = hunk.ab === "a" ? a : b;
+        results.push({
+          stable: true,
+          buffer: hunk.ab,
+          bufferStart: hunk.abStart,
+          bufferLength: hunk.abLength,
+          bufferContent: buffer.slice(hunk.abStart, hunk.abStart + hunk.abLength)
+        });
+      }
+    } else {
+      let bounds = {
+        a: [a.length, -1, o.length, -1],
+        b: [b.length, -1, o.length, -1]
+      };
+      while (regionHunks.length) {
+        hunk = regionHunks.shift();
+        const oStart = hunk.oStart;
+        const oEnd = oStart + hunk.oLength;
+        const abStart = hunk.abStart;
+        const abEnd = abStart + hunk.abLength;
+        let b2 = bounds[hunk.ab];
+        b2[0] = Math.min(abStart, b2[0]);
+        b2[1] = Math.max(abEnd, b2[1]);
+        b2[2] = Math.min(oStart, b2[2]);
+        b2[3] = Math.max(oEnd, b2[3]);
+      }
+      const aStart = bounds.a[0] + (regionStart - bounds.a[2]);
+      const aEnd = bounds.a[1] + (regionEnd - bounds.a[3]);
+      const bStart = bounds.b[0] + (regionStart - bounds.b[2]);
+      const bEnd = bounds.b[1] + (regionEnd - bounds.b[3]);
+      let result = {
+        stable: false,
+        aStart,
+        aLength: aEnd - aStart,
+        aContent: a.slice(aStart, aEnd),
+        oStart: regionStart,
+        oLength: regionEnd - regionStart,
+        oContent: o.slice(regionStart, regionEnd),
+        bStart,
+        bLength: bEnd - bStart,
+        bContent: b.slice(bStart, bEnd)
+      };
+      results.push(result);
+    }
+    currOffset = regionEnd;
+  }
+  advanceTo(o.length);
+  return results;
+}
+function diff3Merge(a, o, b, options) {
+  let defaults = {
+    excludeFalseConflicts: true,
+    stringSeparator: /\s+/
+  };
+  options = Object.assign(defaults, options);
+  if (typeof a === "string")
+    a = a.split(options.stringSeparator);
+  if (typeof o === "string")
+    o = o.split(options.stringSeparator);
+  if (typeof b === "string")
+    b = b.split(options.stringSeparator);
+  let results = [];
+  const regions = diff3MergeRegions(a, o, b);
+  let okBuffer = [];
+  function flushOk() {
+    if (okBuffer.length) {
+      results.push({ ok: okBuffer });
+    }
+    okBuffer = [];
+  }
+  function isFalseConflict(a2, b2) {
+    if (a2.length !== b2.length)
+      return false;
+    for (let i = 0; i < a2.length; i++) {
+      if (a2[i] !== b2[i])
+        return false;
+    }
+    return true;
+  }
+  regions.forEach((region) => {
+    if (region.stable) {
+      okBuffer.push(...region.bufferContent);
+    } else {
+      if (options.excludeFalseConflicts && isFalseConflict(region.aContent, region.bContent)) {
+        okBuffer.push(...region.aContent);
+      } else {
+        flushOk();
+        results.push({
+          conflict: {
+            a: region.aContent,
+            aIndex: region.aStart,
+            o: region.oContent,
+            oIndex: region.oStart,
+            b: region.bContent,
+            bIndex: region.bStart
+          }
+        });
+      }
+    }
+  });
+  flushOk();
+  return results;
+}
+
+// src/sync/three-way-merger.js
+var MAX_TEXT_MERGE_BYTES = 10 * 1024 * 1024;
+function splitLines(text) {
+  const s = String(text == null ? "" : text);
+  const lines = [];
+  let start = 0;
+  const re = /(\r\n|\n|\r)/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    lines.push(s.slice(start, m.index) + m[0]);
+    start = m.index + m[0].length;
+  }
+  if (start < s.length) lines.push(s.slice(start));
+  return lines;
+}
+function looksBinary(bytes) {
+  const probe = bytes.subarray ? bytes.subarray(0, 8e3) : bytes;
+  for (let i = 0; i < probe.length; i++) {
+    if (probe[i] === 0) return true;
+  }
+  return false;
+}
+var ThreeWayMerger = class {
+  /**
+   * @param {object} input {path, base:{bytes}|null, local:{bytes}, remote:{bytes}}
+   * @returns {Promise<{merged:boolean, content:Uint8Array|null,
+   *   conflicts:Array<{path,reason}>, strategy:string}>}
+   */
+  async merge({ path, base, local, remote }) {
+    const localBytes = local && local.bytes;
+    const remoteBytes = remote && remote.bytes;
+    const baseBytes = base && base.bytes;
+    if (!localBytes || !remoteBytes) {
+      return { merged: false, content: null, conflicts: [{ path, reason: "缺少本地或远端内容" }], strategy: "manual-required" };
+    }
+    if (isBinaryPath(path) || looksBinary(localBytes) || looksBinary(remoteBytes)) {
+      return { merged: false, content: null, conflicts: [{ path, reason: "二进制文件不做文本合并" }], strategy: "manual-required" };
+    }
+    if (localBytes.length > MAX_TEXT_MERGE_BYTES || remoteBytes.length > MAX_TEXT_MERGE_BYTES) {
+      return { merged: false, content: null, conflicts: [{ path, reason: "文件过大,不做自动合并" }], strategy: "manual-required" };
+    }
+    const baseText = baseBytes ? GitProvider.bytesToText(baseBytes) : "";
+    const localText = GitProvider.bytesToText(localBytes);
+    const remoteText = GitProvider.bytesToText(remoteBytes);
+    const chunks = diff3Merge(splitLines(localText), splitLines(baseText), splitLines(remoteText), {
+      stringSeparator: false,
+      excludeFalseConflicts: true
+    });
+    const merged = [];
+    for (const chunk of chunks) {
+      if (chunk.conflict) {
+        return {
+          merged: false,
+          content: null,
+          conflicts: [{ path, reason: "双方修改了同一文本文件且无法自动合并" }],
+          strategy: "manual-required"
+        };
+      }
+      if (chunk.ok) merged.push(...chunk.ok);
+    }
+    return {
+      merged: true,
+      content: GitProvider.textToBytes(merged.join("")),
+      conflicts: [],
+      strategy: "text-three-way"
+    };
+  }
+};
+
+// src/sync/commit-builder.js
+var BATCH_BYTE_LIMIT = 80 * 1024 * 1024;
+var DEFAULT_REQUEST_LIMIT = 32 * 1024 * 1024;
+var CommitBuilder = class {
+  constructor({ requestLimit = DEFAULT_REQUEST_LIMIT, batchByteLimit = BATCH_BYTE_LIMIT } = {}) {
+    this.requestLimit = requestLimit;
+    this.batchByteLimit = batchByteLimit;
+  }
+  /**
+   * 构建提交批次。
+   * @param {object} opts {operationId, uploads:[{path, bytes}], deletionsRemote:[{path, remoteSha}]}
+   * @returns {{batches:Array, skipped:Array}}
+   *   github 批次: {entries:[{path,sha,mode}], deletePaths:[...], size, message, part, total}
+   *   gitee 批次:  {operations:[{op,path,bytes,remoteSha}], message, part, total}
+   */
+  build({ operationId, uploads = [], deletionsRemote = [], provider }) {
+    const skipped = [];
+    const oversize = uploads.filter((u) => this._encodedSize(u.bytes) > this.requestLimit);
+    for (const item of oversize) {
+      skipped.push({
+        path: item.path,
+        reason: "LARGE_FILE",
+        size: item.bytes ? item.bytes.length : 0
+      });
+    }
+    const eligible = uploads.filter((u) => !oversize.includes(u));
+    const deletions = deletionsRemote.map((d) => ({ op: "delete", path: d.path, remoteSha: d.remoteSha }));
+    const total = Math.max(1, Math.ceil((eligible.length + deletions.length) / 1) === 0 ? 1 : 1);
+    const chunks = this._chunk(eligible, deletions);
+    const batches = chunks.map((chunk, idx) => ({
+      part: idx + 1,
+      total: chunks.length,
+      size: chunk.size,
+      uploads: chunk.uploads,
+      deletions: chunk.deletions,
+      message: this._message(operationId, chunk, idx + 1, chunks.length),
+      github: provider === "github" ? chunk.github : null,
+      gitee: provider === "gitee" ? chunk.gitee : null
+    }));
+    return { batches, skipped };
+  }
+  _chunk(uploads, deletions) {
+    const chunks = [];
+    let current = { uploads: [], deletions: [], size: 0, github: { entries: [], deletePaths: [] }, gitee: { operations: [] } };
+    const flush = () => {
+      if (current.uploads.length === 0 && current.deletions.length === 0) return;
+      chunks.push(current);
+      current = { uploads: [], deletions: [], size: 0, github: { entries: [], deletePaths: [] }, gitee: { operations: [] } };
+    };
+    for (const item of uploads) {
+      const size = item.bytes ? item.bytes.length : 0;
+      if (current.size + size > this.batchByteLimit && current.uploads.length > 0) flush();
+      current.uploads.push(item);
+      current.size += size;
+      current.github.entries.push({ path: item.path, sha: null, mode: "100644" });
+      current.gitee.operations.push({ op: item.op === "create" ? "create" : "update", path: item.path, bytes: item.bytes, remoteSha: item.remoteSha || null });
+    }
+    for (const d of deletions) {
+      current.deletions.push(d);
+      current.github.deletePaths.push({ path: d.path, sha: d.remoteSha });
+      current.gitee.operations.push(d);
+    }
+    flush();
+    return chunks;
+  }
+  _message(operationId, chunk, part, total) {
+    const creates = chunk.uploads.filter((u) => u.op === "create").length;
+    const updates = chunk.uploads.filter((u) => u.op !== "create").length;
+    const deletes = chunk.deletions.length;
+    const summary = "create " + creates + ", update " + updates + ", delete " + deletes;
+    const partTag = " part " + part + "/" + total;
+    return "sync: " + summary + " [" + operationId + partTag + "]";
+  }
+  _encodedSize(bytes) {
+    if (!bytes) return 0;
+    return Math.ceil(bytes.length / 3) * 4 + 2048;
+  }
+};
+
+// src/sync/conflict-service.js
+var CONFLICT_FILE = "sync-conflicts.json";
+var SNAPSHOT_BYTE_LIMIT = 5 * 1024 * 1024;
+var ConflictService = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.sets = {};
+  }
+  async load() {
+    try {
+      const data = await this.plugin.loadData(CONFLICT_FILE);
+      if (data && typeof data.sets === "object") this.sets = data.sets;
+    } catch (err) {
+      console.warn("[SY-GSP] 冲突集读取失败:", err && err.message);
+    }
+    return this.sets;
+  }
+  openSet(repoKey) {
+    return Object.values(this.sets).find((s) => s.repoKey === repoKey && s.status === "open") || null;
+  }
+  allOpenSets() {
+    return Object.values(this.sets).filter((s) => s.status === "open");
+  }
+  /**
+   * 保存冲突集(覆盖同仓库已有 open 集)。
+   * @param {object} opts {repoKey, operationId, conflicts:[{path, reason, baseSha, localSha, remoteSha,
+   *   snapshots:{baseB64,localB64,remoteB64}}]}
+   */
+  async saveSet(opts) {
+    const conflicts = (opts.conflicts || []).map((c) => ({
+      path: c.path,
+      reason: c.reason || "",
+      baseSha: c.baseSha || null,
+      localSha: c.localSha || null,
+      remoteSha: c.remoteSha || null,
+      snapshots: this._capSnapshots(c.snapshots),
+      status: "open",
+      decision: null
+    }));
+    const set = {
+      repoKey: opts.repoKey,
+      operationId: opts.operationId,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      status: "open",
+      conflicts
+    };
+    for (const [key, s] of Object.entries(this.sets)) {
+      if (s.repoKey === opts.repoKey && s.status === "open") s.status = "superseded";
+    }
+    this.sets[opts.operationId] = set;
+    await this._persist();
+    return set;
+  }
+  /** 单文件决策: keep_local | keep_remote | resolved(用户已编辑) */
+  async decide(operationId, path, decision) {
+    const set = this.sets[operationId];
+    if (!set) throw new SyncError({ category: SyncErrorCategory.UNKNOWN, message: "冲突集不存在: " + operationId });
+    const item = set.conflicts.find((c) => c.path === path);
+    if (!item) throw new SyncError({ category: SyncErrorCategory.UNKNOWN, message: "冲突集不含该文件: " + path });
+    item.decision = decision;
+    item.status = decision === "later" ? "open" : "decided";
+    if (set.conflicts.every((c) => c.status !== "open")) set.status = "decided";
+    await this._persist();
+  }
+  /** 收集一个冲突集的覆盖决策(供引擎重新规划) */
+  collectOverrides(operationId) {
+    const set = this.sets[operationId];
+    if (!set) return /* @__PURE__ */ new Map();
+    const overrides = /* @__PURE__ */ new Map();
+    for (const c of set.conflicts) {
+      if (c.decision === "keep_local" || c.decision === "keep_remote") overrides.set(c.path, c.decision);
+    }
+    return overrides;
+  }
+  /** 关闭冲突集(本轮已处理完毕) */
+  async closeSet(operationId) {
+    const set = this.sets[operationId];
+    if (set) {
+      set.status = "closed";
+      await this._persist();
+    }
+  }
+  _capSnapshots(snapshots) {
+    if (!snapshots) return null;
+    const capped = {};
+    for (const key of ["baseB64", "localB64", "remoteB64"]) {
+      const v = snapshots[key];
+      capped[key] = v && v.length <= SNAPSHOT_BYTE_LIMIT ? v : null;
+    }
+    capped.truncated = Object.keys(snapshots).some((k) => snapshots[k] && !capped[k]);
+    return capped;
+  }
+  async _persist() {
+    try {
+      await this.plugin.saveData(CONFLICT_FILE, { sets: this.sets });
+    } catch (err) {
+      throw new SyncError({
+        category: SyncErrorCategory.LOCAL_FILE,
+        code: "CONFLICT_SAVE_FAILED",
+        operation: "saveConflicts",
+        message: "冲突快照保存失败: " + String(err && err.message || err),
+        recoverable: true,
+        cause: err
+      });
+    }
+  }
+};
+
+// src/sync/sync-queue.js
+var SyncQueue = class {
+  constructor() {
+    this.lanes = /* @__PURE__ */ new Map();
+    this.events = null;
+  }
+  static keyOf({ provider, owner, repo, branch }) {
+    return provider + ":" + owner + "/" + repo + ":" + branch;
+  }
+  /**
+   * 入队一个任务。
+   * @returns {Promise<{merged:boolean, queued:boolean, result:any}>}
+   *   merged=true 表示该触发被合并进运行中/已排队的任务,未创建新任务。
+   */
+  enqueue(key, task, { mergeable = false, label = "" } = {}) {
+    let lane = this.lanes.get(key);
+    if (!lane) {
+      lane = { running: false, pending: 0, chain: Promise.resolve() };
+      this.lanes.set(key, lane);
+    }
+    if (mergeable && (lane.running || lane.pending > 0)) {
+      if (this.events) this.events.emit("queue:merged", { key, label });
+      return Promise.resolve({ merged: true, queued: false, result: null });
+    }
+    lane.pending += 1;
+    const execution = lane.chain.then(
+      () => this._run(key, lane, task, label),
+      () => this._run(key, lane, task, label)
+      // 前任失败不阻塞后续任务
+    );
+    lane.chain = execution.catch(() => {
+    });
+    return execution.then((r) => ({ merged: false, queued: true, result: r }));
+  }
+  async _run(key, lane, task, label) {
+    lane.pending -= 1;
+    lane.running = true;
+    if (this.events) this.events.emit("queue:start", { key, label });
+    try {
+      return await task();
+    } finally {
+      lane.running = false;
+      if (this.events) this.events.emit("queue:finish", { key, label });
+      if (lane.pending <= 0) {
+        const timer = setTimeout(() => {
+          if (!lane.running && lane.pending <= 0) this.lanes.delete(key);
+        }, 0);
+        if (typeof timer.unref === "function") timer.unref();
+      }
+    }
+  }
+  isRunning(key) {
+    const lane = this.lanes.get(key);
+    return !!(lane && lane.running);
+  }
+  /** 包装任务: 任何异常统一转 SyncError 上抛,保持错误可分类 */
+  static wrapError(phase) {
+    return (task) => async () => {
+      try {
+        return await task();
+      } catch (err) {
+        if (err instanceof SyncError) throw err;
+        throw new SyncError({
+          category: SyncErrorCategory.UNKNOWN,
+          phase,
+          message: err && err.message || String(err),
+          detail: err && err.stack || "",
+          cause: err
+        });
+      }
+    };
+  }
+};
+
+// src/sync/retry-policy.js
+var NETWORK_MAX = 3;
+var REMOTE_CHANGED_MAX = 2;
+var BASE_DELAYS_MS = [1e3, 3e3, 9e3];
+var DEFAULT_RETRYABLE_CATEGORIES = Object.freeze([
+  SyncErrorCategory.NETWORK,
+  SyncErrorCategory.TIMEOUT,
+  SyncErrorCategory.REMOTE_CHANGED,
+  SyncErrorCategory.PUSH_REJECTED
+]);
+var NO_RETRY_CATEGORIES = [
+  SyncErrorCategory.AUTH,
+  SyncErrorCategory.PERMISSION,
+  SyncErrorCategory.REPOSITORY,
+  SyncErrorCategory.BRANCH,
+  SyncErrorCategory.LARGE_FILE,
+  SyncErrorCategory.CONFLICT,
+  SyncErrorCategory.LOCAL_FILE,
+  SyncErrorCategory.CANCELLED
+];
+var RetryPolicy = class {
+  constructor({ enabled = false } = {}) {
+    this.enabled = !!enabled;
+  }
+  /**
+   * 判定某错误是否可重试。
+   * @param {SyncError|Error} err
+   * @param {number} attempt 已尝试次数(从 0 开始)
+   * @returns {{retry:boolean, delayMs:number, replan:boolean, reason:string}}
+   */
+  decide(err, attempt) {
+    const category = err && err.category || "";
+    const notEligible = (reason) => ({ retry: false, delayMs: 0, replan: false, reason });
+    if (!this.enabled) return notEligible("自动重试未开启");
+    if (!(err instanceof SyncError)) return notEligible("非 SyncError");
+    if (NO_RETRY_CATEGORIES.indexOf(category) >= 0) return notEligible("该错误类型不自动重试");
+    if (err.retryable === false) return notEligible("错误标记为不可重试");
+    if (category === SyncErrorCategory.NETWORK || category === SyncErrorCategory.TIMEOUT) {
+      if (attempt >= NETWORK_MAX) return notEligible("已达网络类重试上限");
+      return { retry: true, delayMs: this._delay(attempt), replan: false, reason: "网络类暂态错误" };
+    }
+    if (category === SyncErrorCategory.REMOTE_CHANGED || category === SyncErrorCategory.PUSH_REJECTED) {
+      if (attempt >= REMOTE_CHANGED_MAX) return notEligible("已达远端变化重试上限");
+      return { retry: true, delayMs: 0, replan: true, reason: "远端已变化,重新规划" };
+    }
+    return notEligible("未知重试资格");
+  }
+  _delay(attempt) {
+    const base = BASE_DELAYS_MS[Math.min(attempt, BASE_DELAYS_MS.length - 1)];
+    const jitter = Math.round(base * 0.2 * Math.random());
+    return base + jitter;
+  }
+};
+
+// src/sync/sync-context.js
+var SyncState = Object.freeze({
+  IDLE: "IDLE",
+  QUEUED: "QUEUED",
+  CHECKING: "CHECKING",
+  SNAPSHOTTING_LOCAL: "SNAPSHOTTING_LOCAL",
+  FETCHING_REMOTE: "FETCHING_REMOTE",
+  RESOLVING_BASE: "RESOLVING_BASE",
+  PLANNING: "PLANNING",
+  MERGING: "MERGING",
+  CONFLICT_PAUSED: "CONFLICT_PAUSED",
+  COMMITTING: "COMMITTING",
+  VERIFYING_REMOTE_HEAD: "VERIFYING_REMOTE_HEAD",
+  PUSHING: "PUSHING",
+  RETRYING: "RETRYING",
+  SUCCESS: "SUCCESS",
+  FAILED: "FAILED",
+  CANCELLED: "CANCELLED"
+});
+var TRANSITIONS = Object.freeze({
+  [SyncState.IDLE]: [SyncState.QUEUED, SyncState.FAILED],
+  [SyncState.QUEUED]: [SyncState.CHECKING, SyncState.CANCELLED],
+  [SyncState.CHECKING]: [
+    SyncState.SNAPSHOTTING_LOCAL,
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.SNAPSHOTTING_LOCAL]: [
+    SyncState.FETCHING_REMOTE,
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.FETCHING_REMOTE]: [
+    SyncState.RESOLVING_BASE,
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.RESOLVING_BASE]: [
+    SyncState.PLANNING,
+    SyncState.CONFLICT_PAUSED,
+    // 基准无法恢复 → 阻止写入,等待恢复向导
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.PLANNING]: [
+    SyncState.MERGING,
+    SyncState.SUCCESS,
+    // 本地与远端均无变化
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.MERGING]: [
+    SyncState.CONFLICT_PAUSED,
+    // 无法自动合并
+    SyncState.COMMITTING,
+    SyncState.SUCCESS,
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.CONFLICT_PAUSED]: [
+    SyncState.CHECKING,
+    // 用户决策后重新规划
+    SyncState.FAILED
+  ],
+  [SyncState.COMMITTING]: [
+    SyncState.VERIFYING_REMOTE_HEAD,
+    SyncState.PUSHING,
+    SyncState.RETRYING,
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.VERIFYING_REMOTE_HEAD]: [
+    SyncState.PUSHING,
+    SyncState.RETRYING,
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.PUSHING]: [
+    SyncState.SUCCESS,
+    SyncState.RETRYING,
+    SyncState.COMMITTING,
+    // 多批次提交: 下一批回到提交阶段
+    SyncState.VERIFYING_REMOTE_HEAD,
+    // 多批次提交: 下一批重新校验远端 HEAD
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.RETRYING]: [
+    SyncState.FETCHING_REMOTE,
+    SyncState.FAILED,
+    SyncState.CANCELLED
+  ],
+  [SyncState.SUCCESS]: [SyncState.IDLE],
+  [SyncState.FAILED]: [SyncState.IDLE],
+  [SyncState.CANCELLED]: [SyncState.IDLE]
+});
+function canTransition(from, to) {
+  const allowed = TRANSITIONS[from];
+  return !!allowed && allowed.indexOf(to) >= 0;
+}
+var SyncTrigger = Object.freeze({
+  MANUAL: "manual",
+  AUTOMATIC: "automatic",
+  STARTUP: "startup",
+  RETRY: "retry",
+  CONFLICT_RESOLUTION: "conflict_resolution",
+  DIAGNOSIS: "diagnosis"
+});
+var SyncMode = Object.freeze({
+  AUTO: "auto",
+  REMOTE_OVER_LOCAL: "remote_over_local",
+  LOCAL_OVER_REMOTE: "local_over_remote"
+});
+var contextSeq = 0;
+function createSyncContext({ trigger, mode, provider, owner, repo, branch }) {
+  contextSeq += 1;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    id: "sync-" + Date.now() + "-" + contextSeq,
+    trigger: trigger || SyncTrigger.MANUAL,
+    mode: mode || SyncMode.AUTO,
+    provider: provider || "",
+    owner: owner || "",
+    repo: repo || "",
+    branch: branch || "",
+    startedAt: now,
+    finishedAt: null,
+    phase: SyncState.QUEUED,
+    state: SyncState.QUEUED,
+    attempt: 0,
+    baseCommit: null,
+    expectedRemoteHead: null,
+    observedRemoteHead: null,
+    localSnapshotId: null,
+    plan: null,
+    result: null,
+    error: null,
+    conflicts: [],
+    /** @type {Array<{state:string, at:string, note:string}>} 状态流转轨迹(内存,不持久化) */
+    trail: []
+  };
+}
+function transition(ctx, to, note = "") {
+  if (!canTransition(ctx.state, to)) {
+    const err = new Error(
+      "非法状态转换: " + ctx.state + " -> " + to + (note ? " (" + note + ")" : "")
+    );
+    err.illegalTransition = true;
+    err.fromState = ctx.state;
+    err.toState = to;
+    throw err;
+  }
+  ctx.trail.push({ state: to, at: (/* @__PURE__ */ new Date()).toISOString(), note });
+  ctx.state = to;
+  if (to !== SyncState.SUCCESS && to !== SyncState.FAILED && to !== SyncState.CANCELLED) {
+    ctx.phase = to;
+  }
+  return ctx;
+}
+function finish(ctx, { state, result, error }) {
+  ctx.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+  ctx.state = state;
+  ctx.result = result || null;
+  ctx.error = error || null;
+  return ctx;
+}
+
+// src/sync/sync-engine.js
+var SyncEngine = class {
+  /**
+   * @param {object} deps {
+   *   provider, workspace, contentAdapter, metadataStore, manifestStore, conflictService,
+   *   planner, merger, commitBuilder, events, config:{syncRange, syncFileType, repoKey}
+   * }
+   */
+  constructor(deps) {
+    this.provider = deps.provider;
+    this.workspace = deps.workspace;
+    this.contentAdapter = deps.contentAdapter;
+    this.metadataStore = deps.metadataStore;
+    this.manifestStore = deps.manifestStore;
+    this.conflictService = deps.conflictService;
+    this.planner = deps.planner;
+    this.merger = deps.merger;
+    this.commitBuilder = deps.commitBuilder;
+    this.events = deps.events;
+    this.config = deps.config;
+  }
+  _emit(name, payload) {
+    if (this.events) this.events.emit(name, payload);
+  }
+  async run(ctx) {
+    try {
+      transition(ctx, SyncState.CHECKING);
+      this._emit("engine:phase", { ctx, state: SyncState.CHECKING });
+      this._checkConfig(ctx);
+      transition(ctx, SyncState.SNAPSHOTTING_LOCAL);
+      this._emit("engine:phase", { ctx, state: SyncState.SNAPSHOTTING_LOCAL });
+      const scan = await this.workspace.scan({ range: this.config.syncRange });
+      const localShas = /* @__PURE__ */ new Map();
+      for (const file of scan.files) {
+        const bytes = await this._readLocalBytes(file.path);
+        localShas.set(file.path, bytes ? await this.provider.gitBlobSha(bytes) : null);
+      }
+      ctx.localSnapshotId = ctx.id;
+      transition(ctx, SyncState.FETCHING_REMOTE);
+      this._emit("engine:phase", { ctx, state: SyncState.FETCHING_REMOTE });
+      let remoteHead = null;
+      try {
+        remoteHead = await this.provider.getBranchHead();
+        ctx.observedRemoteHead = remoteHead.sha;
+        const remoteCommit = await this.provider.getCommit(remoteHead.sha);
+        var remoteEntries = await this._treeMap(await this.provider.getTree(remoteCommit.treeSha));
+      } catch (err) {
+        if (err instanceof SyncError && err.httpStatus === 404) {
+          ctx.remoteHeadless = true;
+          remoteHead = null;
+          var remoteEntries = /* @__PURE__ */ new Map();
+        } else {
+          throw err;
+        }
+      }
+      transition(ctx, SyncState.RESOLVING_BASE);
+      this._emit("engine:phase", { ctx, state: SyncState.RESOLVING_BASE });
+      const baseResolution = await this._resolveBase(ctx, remoteHead ? remoteHead.sha : null);
+      if (baseResolution.unresolved) {
+        ctx.baseUnresolved = true;
+        ctx.conflicts = [{ path: "__base__", reason: "BASE_UNRESOLVED", detail: baseResolution.reason }];
+        transition(ctx, SyncState.CONFLICT_PAUSED, "BASE_UNRESOLVED");
+        finish(ctx, { state: SyncState.CONFLICT_PAUSED, result: { paused: true, kind: "BASE_UNRESOLVED" } });
+        return ctx.result;
+      }
+      const baseEntries = baseResolution.baseEntries;
+      if (baseResolution.bootstrapDownload) {
+        ctx.bootstrapDownload = true;
+      }
+      transition(ctx, SyncState.PLANNING);
+      this._emit("engine:phase", { ctx, state: SyncState.PLANNING });
+      ctx.expectedRemoteHead = remoteHead ? remoteHead.sha : null;
+      const overrides = ctx.overrides || /* @__PURE__ */ new Map();
+      const plan = await this.planner.build({
+        baseEntries,
+        remoteEntries,
+        localFiles: scan.files,
+        localShas,
+        mode: ctx.mode,
+        overrides,
+        enumErrorOccurred: scan.enumErrorOccurred,
+        bootstrap: ctx.bootstrapDownload === true
+      });
+      ctx.plan = plan;
+      transition(ctx, SyncState.MERGING);
+      this._emit("engine:phase", { ctx, state: SyncState.MERGING });
+      await this._runMerges(ctx, plan, baseEntries, remoteEntries);
+      if (plan.conflicts.length > 0) {
+        await this._saveConflicts(ctx, plan, baseEntries, remoteEntries);
+        transition(ctx, SyncState.CONFLICT_PAUSED, "conflicts=" + plan.conflicts.length);
+        finish(ctx, {
+          state: SyncState.CONFLICT_PAUSED,
+          result: {
+            paused: true,
+            kind: "FILE_CONFLICTS",
+            conflictCount: plan.conflicts.length,
+            conflicts: plan.conflicts.map((c) => ({ path: c.path, reason: c.reason }))
+          }
+        });
+        return ctx.result;
+      }
+      const remoteWrites = plan.uploads.length + plan.deletionsRemote.length;
+      if (remoteWrites === 0) {
+        await this._applyLocalChanges(ctx, plan);
+        await this._rebuildManifest(ctx, plan);
+        if (remoteHead) {
+          await this.metadataStore.setConfirmedCommit(this.config.repoKey, remoteHead.sha, ctx.id);
+        }
+        transition(ctx, SyncState.SUCCESS, "无远端变更");
+        finish(ctx, { state: SyncState.SUCCESS, result: this._result(ctx, remoteHead ? remoteHead.sha : null, plan) });
+        return ctx.result;
+      }
+      transition(ctx, SyncState.COMMITTING);
+      this._emit("engine:phase", { ctx, state: SyncState.COMMITTING });
+      const { batches, skipped } = this.commitBuilder.build({
+        operationId: ctx.id,
+        uploads: await this._materializeUploads(ctx, plan),
+        deletionsRemote: plan.deletionsRemote,
+        provider: this.provider.platform
+      });
+      ctx.skippedLarge = skipped;
+      let finalSha;
+      if (batches.length === 0) {
+        finalSha = remoteHead ? remoteHead.sha : null;
+      } else if (this.provider.platform === "github") {
+        finalSha = await this._pushAtomic(ctx, batches, remoteEntries);
+      } else {
+        finalSha = await this._pushPerFile(ctx, batches);
+      }
+      if (batches.length > 0 && !finalSha) {
+        throw new SyncError({
+          category: SyncErrorCategory.REMOTE_CHANGED,
+          code: "PUSH_UNCONFIRMED",
+          operation: "push",
+          message: "推送后无法确认远端引用状态,本轮不标记成功",
+          retryable: true,
+          recoverable: false
+        });
+      }
+      await this._applyLocalChanges(ctx, plan);
+      await this._rebuildManifest(ctx, plan);
+      const confirmedSha = finalSha || (remoteHead ? remoteHead.sha : null);
+      if (confirmedSha) {
+        await this.metadataStore.setConfirmedCommit(this.config.repoKey, confirmedSha, ctx.id);
+      }
+      transition(ctx, SyncState.SUCCESS);
+      finish(ctx, { state: SyncState.SUCCESS, result: this._result(ctx, confirmedSha, plan) });
+      return ctx.result;
+    } catch (err) {
+      const syncErr = err instanceof SyncError ? err : new SyncError({
+        category: SyncErrorCategory.UNKNOWN,
+        phase: ctx.state,
+        message: err && err.message || String(err),
+        detail: err && err.stack || "",
+        cause: err
+      });
+      syncErr.phase = syncErr.phase || ctx.state;
+      ctx.error = syncErr;
+      if (ctx.state !== SyncState.CONFLICT_PAUSED) {
+        try {
+          transition(ctx, SyncState.FAILED);
+        } catch (e) {
+          ctx.state = SyncState.FAILED;
+        }
+      }
+      finish(ctx, { state: ctx.state, error: syncErr, result: { paused: ctx.state === SyncState.CONFLICT_PAUSED } });
+      throw syncErr;
+    }
+  }
+  // ---------- 阶段实现 ----------
+  _checkConfig(ctx) {
+    if (!ctx.owner || !ctx.repo) {
+      throw new SyncError({ category: SyncErrorCategory.REPOSITORY, phase: SyncState.CHECKING, message: "仓库地址未配置或无法解析", recoverable: true });
+    }
+    if (!ctx.branch) {
+      throw new SyncError({ category: SyncErrorCategory.BRANCH, phase: SyncState.CHECKING, message: "分支未配置", recoverable: true });
+    }
+    if (!this.provider.token) {
+      throw new SyncError({ category: SyncErrorCategory.AUTH, phase: SyncState.CHECKING, message: "Token 未配置", recoverable: true });
+    }
+  }
+  async _treeMap(entries) {
+    const map = /* @__PURE__ */ new Map();
+    for (const e of entries || []) {
+      if (String(e.type).toLowerCase() !== "blob") continue;
+      map.set(e.path, { sha: e.sha, type: e.type, size: e.size || 0 });
+    }
+    return map;
+  }
+  /**
+   * BASE 解析(2.0 方案 §7.3):
+   * - 确认基准存在且远端可达 → 使用;
+   * - 提交丢失 → 尝试合并基重建;
+   * - 无法证明共同祖先 → BASE_UNRESOLVED(不自动选边);
+   * - 首次同步: 空仓库(BASE=null)直接进入;远端已有内容则交由首同步向导。
+   */
+  async _resolveBase(ctx, remoteHeadSha) {
+    const repoKey = this.config.repoKey;
+    const baseSha = this.metadataStore.getBaseCommit(repoKey);
+    if (baseSha) {
+      try {
+        const baseCommit = await this.provider.getCommit(baseSha);
+        return { baseEntries: await this._treeMap(await this.provider.getTree(baseCommit.treeSha)), baseSha };
+      } catch (err) {
+        const mergeBase = await this.provider.getMergeBase(baseSha, remoteHeadSha);
+        if (mergeBase) {
+          const mbCommit = await this.provider.getCommit(mergeBase);
+          ctx.baseRebuiltFrom = mergeBase;
+          return { baseEntries: await this._treeMap(await this.provider.getTree(mbCommit.treeSha)), baseSha: mergeBase };
+        }
+        return { unresolved: true, reason: "确认基准 " + baseSha.slice(0, 8) + " 在远端不可访问,且找不到共同祖先" };
+      }
+    }
+    let initial = null;
+    try {
+      initial = await this.provider.getInitialCommit();
+    } catch (err) {
+      if (err instanceof SyncError && err.httpStatus === 404) initial = null;
+      else throw err;
+    }
+    if (!initial) {
+      return { baseEntries: /* @__PURE__ */ new Map(), baseSha: null };
+    }
+    const scan = await this.workspace.scan({ range: this.config.syncRange });
+    if (scan.files.length === 0) {
+      return { baseEntries: await this._treeMap(await this.provider.getTree(initial.treeSha)), baseSha: initial.sha, bootstrapDownload: true };
+    }
+    return {
+      unresolved: true,
+      reason: "首次同步: 本地与远端都有内容,无法证明共同基准,需要通过首同步向导明确选择"
+    };
+  }
+  async _runMerges(ctx, plan, baseEntries, remoteEntries) {
+    for (const mergeItem of plan.merges) {
+      const path = mergeItem.path;
+      const baseBytes = mergeItem.baseSha ? (await this.provider.getBlob(mergeItem.baseSha)).bytes : null;
+      const remoteBytes = (await this.provider.getBlob(mergeItem.remoteSha)).bytes;
+      const localBytes = await this._readLocalBytes(path);
+      const result = await this.merger.merge({
+        path,
+        base: baseBytes ? { bytes: baseBytes } : null,
+        local: { bytes: localBytes },
+        remote: { bytes: remoteBytes }
+      });
+      if (result.merged) {
+        await this.contentAdapter.writeFileBlob(path, new Blob([result.content]), "raw", "update");
+        plan.uploads.push({ path, bytes: result.content, op: "update", merged: true });
+        plan.unchanged += 0;
+      } else {
+        plan.conflicts.push({
+          path,
+          reason: result.conflicts[0] && result.conflicts[0].reason || "无法自动合并",
+          baseSha: mergeItem.baseSha,
+          localSha: await this.provider.gitBlobSha(localBytes),
+          remoteSha: mergeItem.remoteSha
+        });
+      }
+    }
+    plan.merges.length = 0;
+  }
+  async _saveConflicts(ctx, plan, baseEntries, remoteEntries) {
+    const conflicts = [];
+    for (const c of plan.conflicts) {
+      let snapshots = null;
+      try {
+        const localBytes = await this._readLocalBytes(c.path);
+        const remoteBytes = c.remoteSha ? (await this.provider.getBlob(c.remoteSha)).bytes : null;
+        const baseBytes = c.baseSha ? (await this.provider.getBlob(c.baseSha)).bytes : null;
+        snapshots = {
+          localB64: localBytes ? this.provider.bytesToBase64(localBytes) : null,
+          remoteB64: remoteBytes ? this.provider.bytesToBase64(remoteBytes) : null,
+          baseB64: baseBytes ? this.provider.bytesToBase64(baseBytes) : null
+        };
+      } catch (err) {
+        snapshots = { localB64: null, remoteB64: null, baseB64: null };
+      }
+      conflicts.push({ path: c.path, reason: c.reason, baseSha: c.baseSha, localSha: c.localSha, remoteSha: c.remoteSha, snapshots });
+    }
+    await this.conflictService.saveSet({
+      repoKey: this.config.repoKey,
+      operationId: ctx.id,
+      conflicts
+    });
+    ctx.conflicts = conflicts.map((c) => ({ path: c.path, reason: c.reason }));
+  }
+  /** 读取待上传内容(读取版本 = 提交版本;超限在 CommitBuilder 预检) */
+  async _materializeUploads(ctx, plan) {
+    const uploads = [];
+    for (const item of plan.uploads) {
+      if (item.bytes) {
+        uploads.push(item);
+        continue;
+      }
+      const format = this._uploadFormat(item.path);
+      const blob = await this.contentAdapter.readFileBlob(item.path, format);
+      if (!blob) {
+        throw new SyncError({
+          category: SyncErrorCategory.LOCAL_FILE,
+          code: "READ_EMPTY",
+          operation: "materializeUploads",
+          path: item.path,
+          message: "本地文件读取为空,已停止上传: " + item.path,
+          retryable: false,
+          recoverable: true
+        });
+      }
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (bytes.length === 0 && /\.sy$/i.test(item.path)) {
+        throw new SyncError({
+          category: SyncErrorCategory.LOCAL_FILE,
+          code: "EMPTY_DOC",
+          operation: "materializeUploads",
+          path: item.path,
+          message: "笔记文件内容为空,拒绝上传: " + item.path,
+          retryable: false,
+          recoverable: true
+        });
+      }
+      uploads.push(Object.assign({}, item, { bytes, format }));
+    }
+    return uploads;
+  }
+  _uploadFormat(path) {
+    if (this.config.syncFileType === "markdown" && /\.sy$/i.test(path)) return "markdown";
+    return "raw";
+  }
+  /** GitHub: 原子树提交 + 引用 CAS + 回读确认(空仓库时首推创建引用) */
+  async _pushAtomic(ctx, batches, remoteEntries) {
+    let finalSha = null;
+    for (const batch of batches) {
+      if (batch.uploads.length === 0 && batch.github.deletePaths.length === 0) continue;
+      let headNow = null;
+      try {
+        headNow = await this.provider.getBranchHead();
+      } catch (err) {
+        if (!(err instanceof SyncError && err.httpStatus === 404)) throw err;
+      }
+      if (headNow) {
+        if (!ctx.expectedRemoteHead || headNow.sha !== ctx.expectedRemoteHead) {
+          throw new SyncError({
+            category: SyncErrorCategory.REMOTE_CHANGED,
+            code: "REMOTE_HEAD_MOVED",
+            operation: "prePushCheck",
+            message: "远端分支在规划后已变化(" + headNow.sha.slice(0, 8) + "),本轮重新规划",
+            retryable: true,
+            recoverable: false
+          });
+        }
+        transition(ctx, SyncState.VERIFYING_REMOTE_HEAD);
+        ctx.expectedRemoteHead = headNow.sha;
+      }
+      const treeBaseSha = headNow ? (await this.provider.getCommit(headNow.sha)).treeSha : null;
+      const entries = [];
+      for (const upload of batch.uploads) {
+        const blobSha = await this.provider.createBlob(upload.bytes);
+        entries.push({ path: upload.path, sha: blobSha, mode: "100644" });
+      }
+      for (const dp of batch.github.deletePaths) {
+        entries.push({ path: dp.path, sha: null, mode: "100644" });
+      }
+      const tree = await this.provider.createTree(treeBaseSha, entries);
+      const parentSha = finalSha || (headNow ? headNow.sha : null);
+      const commit = await this.provider.createCommit({
+        message: batch.message,
+        treeSha: tree.sha,
+        parents: parentSha ? [parentSha] : []
+      });
+      transition(ctx, SyncState.PUSHING);
+      if (!headNow) {
+        const confirmed = await this.provider.ensureBranchRef(commit.sha);
+        finalSha = confirmed.confirmedSha;
+        ctx.expectedRemoteHead = finalSha;
+      } else {
+        try {
+          const confirmed = await this.provider.updateBranchRef(commit.sha, { expectedHead: headNow.sha });
+          finalSha = confirmed.confirmedSha;
+        } catch (err) {
+          throw this.provider.mapUpdateRefFailure(err);
+        }
+      }
+    }
+    return finalSha;
+  }
+  /** Gitee: 逐文件写入 + 操作日志 + 部分失败显式化(空仓库由 Gitee 分支参数自动建分支) */
+  async _pushPerFile(ctx, batches) {
+    let lastHead = "";
+    let lastCommitSha = "";
+    for (const batch of batches) {
+      if (batch.gitee.operations.length === 0) continue;
+      if (ctx.state === SyncState.COMMITTING) {
+        transition(ctx, SyncState.PUSHING);
+      }
+      const result = await this.provider.applyFileOperations(batch.gitee.operations, { message: batch.message });
+      lastHead = result.remoteHead || lastHead;
+      const commits = (result.operations || []).map((o) => o.commitSha).filter(Boolean);
+      if (commits.length > 0) lastCommitSha = commits[commits.length - 1];
+    }
+    if (!lastHead) {
+      lastHead = lastCommitSha;
+    }
+    if (!lastHead) {
+      const head = await this.provider.getBranchHead();
+      lastHead = head.sha;
+    }
+    return lastHead;
+  }
+  /** 远端确认后应用本地侧变更(下载/本地删除),破坏性动作先备份 */
+  async _applyLocalChanges(ctx, plan) {
+    const formatOf = (path) => this.config.syncFileType === "markdown" && /\.sy$/i.test(path) ? "markdown" : "raw";
+    for (const item of plan.downloads) {
+      const src = await this.provider.getFileContent(item.path, ctx.observedRemoteHead);
+      const blob = new Blob([src.bytes]);
+      await this.contentAdapter.writeFileBlob(item.path, blob, formatOf(item.path), item.op === "create" ? "create" : "update");
+    }
+    for (const item of plan.deletionsLocal) {
+      await this.contentAdapter.removeFileWithBackup(item.path);
+    }
+    if (plan.downloads.length > 0 || plan.deletionsLocal.length > 0) {
+      await this.contentAdapter.kernel.refreshFiletree().catch(() => {
+      });
+    }
+  }
+  async _rebuildManifest(ctx, plan) {
+    const scan = await this.workspace.scan({ range: this.config.syncRange });
+    await this.manifestStore.replaceAll(scan.files.map((f) => f.path));
+  }
+  _result(ctx, sha, plan) {
+    return {
+      success: true,
+      operationId: ctx.id,
+      commitSha: sha,
+      remoteHead: sha,
+      uploads: plan.uploads.length,
+      downloads: plan.downloads.length,
+      deletionsRemote: plan.deletionsRemote.length,
+      deletionsLocal: plan.deletionsLocal.length,
+      skippedDeletes: plan.skippedDeletes,
+      skippedLarge: ctx.skippedLarge || [],
+      unchanged: plan.unchanged,
+      conflicts: 0
+    };
+  }
+  async _readLocalBytes(path) {
+    const blob = await this.contentAdapter.kernel.getFile(path);
+    if (!blob) return null;
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+};
+
+// src/sync/sync-controller.js
+var ENGINE_STATE_FILE = "engine-state.json";
+var SyncController = class {
+  /**
+   * @param {object} deps {
+   *   plugin, settings, events, notify, i18n,
+   *   makeEngineDeps: (ctx) => {provider, workspace, contentAdapter, metadataStore,
+   *     manifestStore, conflictService, planner, merger, commitBuilder, events, config},
+   *   repoInfo: () => {provider, owner, repo, branch, token},
+   *   autoSync: {pause(), resume(), markAutoTick()}
+   * }
+   */
+  constructor(deps) {
+    this.plugin = deps.plugin;
+    this.settings = deps.settings;
+    this.events = deps.events;
+    this.notify = deps.notify;
+    this.i18n = deps.i18n || ((k, fb) => fb);
+    this.makeEngineDeps = deps.makeEngineDeps;
+    this.repoInfo = deps.repoInfo;
+    this.autoSync = deps.autoSync;
+    this.queue = new SyncQueue();
+    this.retryPolicy = new RetryPolicy({ enabled: false });
+    this.state = SyncState.IDLE;
+    this.lastContext = null;
+    this.conflictPaused = null;
+    this.autoTick = false;
+    this._autoSkipNotified = false;
+    this.retryTimer = null;
+  }
+  /** 恢复持久化的冲突暂停状态(onload) */
+  async restore() {
+    try {
+      const saved = await this.plugin.loadData(ENGINE_STATE_FILE);
+      if (saved && saved.conflictPaused) {
+        this.conflictPaused = saved.conflictPaused;
+        this.state = SyncState.CONFLICT_PAUSED;
+        this.events.emit("state:changed", { state: this.state, conflictPaused: this.conflictPaused });
+      }
+    } catch (err) {
+      console.warn("[SY-GSP] 恢复暂停状态失败:", err && err.message);
+    }
+  }
+  _persistState() {
+    const payload = this.conflictPaused ? { conflictPaused: this.conflictPaused } : {};
+    this.plugin.saveData(ENGINE_STATE_FILE, payload).catch((err) => {
+      this.notify(this.i18n("sygspPersistFailed", "⚠️ 状态保存失败,重启后可能丢失暂停状态"), "error");
+      console.warn("[SY-GSP] 状态持久化失败:", err && err.message);
+    });
+  }
+  /** 自动同步定时器回调前打标: 区分定时触发与手动触发 */
+  markAutoTick() {
+    this.autoTick = true;
+  }
+  isConflictPaused() {
+    return !!this.conflictPaused;
+  }
+  /**
+   * 发起一次同步。
+   * @param {object} opts {trigger, mode, overrides(Map), resolutionOf?}
+   */
+  async syncNow({ trigger = SyncTrigger.MANUAL, mode = SyncMode.AUTO, overrides = null } = {}) {
+    const info = this.repoInfo();
+    const key = SyncQueue.keyOf(info);
+    if (this.conflictPaused) {
+      const isResolution = overrides !== null || mode !== SyncMode.AUTO;
+      if (!isResolution) {
+        const wasAuto = this.autoTick;
+        this.autoTick = false;
+        if (wasAuto) {
+          if (!this._autoSkipNotified) {
+            this._autoSkipNotified = true;
+            this.notify(this.i18n("sygspPausedMsg", "⚠️ 同步冲突未处理,自动同步已暂停,请先处理冲突"), "error");
+          }
+          return { skipped: true };
+        }
+        this.events.emit("conflict:reopen", { conflictPaused: this.conflictPaused });
+        return { skipped: true, conflict: true };
+      }
+    }
+    this.autoTick = false;
+    const ctx = createSyncContext({
+      trigger,
+      mode: this.conflictPaused && overrides ? SyncMode.AUTO : mode,
+      provider: info.provider,
+      owner: info.owner,
+      repo: info.repo,
+      branch: info.branch
+    });
+    if (overrides) ctx.overrides = overrides;
+    return this.queue.enqueue(
+      key,
+      () => this._runWithRetry(ctx),
+      { mergeable: trigger === SyncTrigger.AUTOMATIC, label: ctx.id }
+    );
+  }
+  async _runWithRetry(ctx) {
+    this.state = ctx.state;
+    this.lastContext = ctx;
+    this.events.emit("state:changed", { state: this.state, ctx });
+    let attempt = 0;
+    for (; ; ) {
+      try {
+        const engine = new SyncEngine(this.makeEngineDeps(ctx));
+        const result = await engine.run(ctx);
+        if (result && result.paused) {
+          await this._onFailed(ctx, new SyncError({
+            category: SyncErrorCategory.CONFLICT,
+            code: result.kind,
+            phase: ctx.state,
+            message: ctx.conflicts && ctx.conflicts[0] && (ctx.conflicts[0].reason || ctx.conflicts[0].detail) || "同步已暂停"
+          }));
+          return result;
+        }
+        await this._onFinished(ctx, result);
+        return result;
+      } catch (err) {
+        const syncErr = err instanceof SyncError ? err : toSyncError(err, { phase: ctx.state });
+        const decision = this.retryPolicy.decide(syncErr, attempt);
+        if (!decision.retry || ctx.state === SyncState.CONFLICT_PAUSED) {
+          await this._onFailed(ctx, syncErr);
+          throw syncErr;
+        }
+        attempt += 1;
+        ctx.attempt = attempt;
+        try {
+          transition(ctx, SyncState.RETRYING);
+        } catch (e) {
+          ctx.state = SyncState.RETRYING;
+        }
+        this.events.emit("state:changed", { state: SyncState.RETRYING, ctx });
+        this.notify(
+          this.i18n("sygspRetrying", "⚠️ 同步失败,准备重试") + " (" + attempt + "/" + (decision.replan ? 2 : 3) + "): " + syncErr.message,
+          "error"
+        );
+        if (decision.delayMs > 0) {
+          await new Promise((resolve) => {
+            this.retryTimer = setTimeout(resolve, decision.delayMs);
+          });
+        }
+        ctx = createSyncContext({
+          trigger: SyncTrigger.RETRY,
+          mode: ctx.mode,
+          provider: ctx.provider,
+          owner: ctx.owner,
+          repo: ctx.repo,
+          branch: ctx.branch
+        });
+        ctx.attempt = attempt;
+        this.lastContext = ctx;
+      }
+    }
+  }
+  async _onFinished(ctx, result) {
+    this.state = SyncState.SUCCESS;
+    if (this.conflictPaused) {
+      this.conflictPaused = null;
+      this._autoSkipNotified = false;
+      this._persistState();
+      this.autoSync.resume();
+      this.notify(this.i18n("sygspResolvedMsg", "✅ 冲突已处理,自动同步已恢复"), "info");
+    }
+    this.events.emit("state:changed", { state: this.state, ctx });
+    this.events.emit("sync:success", { ctx, result });
+  }
+  async _onFailed(ctx, syncErr) {
+    if (ctx.state === SyncState.CONFLICT_PAUSED) {
+      const kind = ctx.baseUnresolved ? "BASE_UNRESOLVED" : "FILE_CONFLICTS";
+      this.conflictPaused = {
+        kind,
+        repoKey: this.repoKey(),
+        operationId: ctx.id,
+        reason: kind === "BASE_UNRESOLVED" ? ctx.conflicts[0] && ctx.conflicts[0].detail || "基准无法解析" : "存在未处理冲突",
+        conflictCount: kind === "FILE_CONFLICTS" ? (ctx.conflicts || []).length : 0
+      };
+      this._persistState();
+      this.autoSync.pause();
+      this.state = SyncState.CONFLICT_PAUSED;
+      this.events.emit("state:changed", { state: this.state, ctx, conflictPaused: this.conflictPaused });
+      this.events.emit("sync:conflict", { ctx, conflictPaused: this.conflictPaused });
+      return;
+    }
+    this.state = SyncState.FAILED;
+    this.events.emit("state:changed", { state: this.state, ctx, error: syncErr });
+    this.events.emit("sync:error", { ctx, error: syncErr });
+  }
+  repoKey() {
+    const info = this.repoInfo();
+    return SyncQueue.keyOf(info);
+  }
+  /** 用户冲突决策: 逐文件 keep_local/keep_remote → 重新规划执行 */
+  async resolveConflicts(decisions) {
+    const overrides = new Map(Object.entries(decisions || {}));
+    if (this.conflictPaused && this.conflictPaused.kind === "BASE_UNRESOLVED") {
+      return this._resolveBaseUnresolved(overrides);
+    }
+    return this.syncNow({ trigger: SyncTrigger.CONFLICT_RESOLUTION, overrides });
+  }
+  /** 基准失效恢复: 明确选择一方为新基准后执行一次强制方向同步 */
+  async _resolveBaseUnresolved(overrides) {
+    const choice = overrides.get("__base__");
+    if (choice !== "keep_local" && choice !== "keep_remote") {
+      throw new SyncError({
+        category: SyncErrorCategory.UNKNOWN,
+        message: "基准恢复需要明确选择 keep_local 或 keep_remote",
+        recoverable: true
+      });
+    }
+    const mode = choice === "keep_local" ? SyncMode.LOCAL_OVER_REMOTE : SyncMode.REMOTE_OVER_LOCAL;
+    const result = await this.syncNow({ trigger: SyncTrigger.CONFLICT_RESOLUTION, mode });
+    if (result && result.result && result.result.success) {
+      await this.plugin.saveData(ENGINE_STATE_FILE, {});
+      this.conflictPaused = null;
+      this._persistState();
+    }
+    return result;
+  }
+  dismissConflictPause() {
+    this.conflictPaused = null;
+    this._persistState();
+    this.events.emit("state:changed", { state: this.state });
+  }
+  destroy() {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+  }
+};
+
+// src/storage/sync-metadata-store.js
+var METADATA_FILE = "sync-metadata.json";
+var SCHEMA_VERSION = 1;
+var SyncMetadataStore = class {
+  /**
+   * @param {object} plugin 思源插件实例(saveData/loadData)
+   */
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.data = { schemaVersion: SCHEMA_VERSION, repositories: {}, legacyHints: {} };
+  }
+  static keyOf({ provider, owner, repo, branch }) {
+    return provider + ":" + owner + "/" + repo + ":" + branch;
+  }
+  async load() {
+    try {
+      const data = await this.plugin.loadData(METADATA_FILE);
+      if (data && typeof data === "object") {
+        this.data = {
+          schemaVersion: data.schemaVersion || SCHEMA_VERSION,
+          repositories: data.repositories || {},
+          legacyHints: data.legacyHints || {}
+        };
+      }
+    } catch (err) {
+      if (err && !/not found|不存在/i.test(String(err.message || err))) {
+        throw new SyncError({
+          category: SyncErrorCategory.LOCAL_FILE,
+          code: "METADATA_LOAD_FAILED",
+          operation: "loadMetadata",
+          message: "同步元数据读取失败: " + String(err && err.message || err),
+          retryable: false,
+          recoverable: true,
+          cause: err
+        });
+      }
+    }
+    return this.data;
+  }
+  /** 读取指定仓库分支的基准信息 */
+  get(repoKey) {
+    return this.data.repositories[repoKey] || null;
+  }
+  getBaseCommit(repoKey) {
+    const entry = this.get(repoKey);
+    return entry && entry.lastConfirmedCommit ? entry.lastConfirmedCommit : null;
+  }
+  /**
+   * 写入确认基准(仅允许在远端确认成功后调用)。
+   */
+  async setConfirmedCommit(repoKey, commitSha, operationId) {
+    this.data.repositories[repoKey] = {
+      lastConfirmedCommit: commitSha,
+      lastSuccessfulAt: (/* @__PURE__ */ new Date()).toISOString(),
+      lastOperationId: operationId || ""
+    };
+    await this._persist();
+  }
+  /** 记录旧版基准线索(仅诊断用,不作为基准) */
+  async setLegacyHint(repoKey, hint) {
+    if (hint) this.data.legacyHints[repoKey] = hint;
+    await this._persist();
+  }
+  getLegacyHint(repoKey) {
+    return this.data.legacyHints[repoKey] || null;
+  }
+  /** 清空基准(按仓库,或不带参数全量重置) */
+  async clear(repoKey) {
+    if (repoKey) {
+      delete this.data.repositories[repoKey];
+      delete this.data.legacyHints[repoKey];
+    } else {
+      this.data.repositories = {};
+      this.data.legacyHints = {};
+    }
+    await this._persist();
+  }
+  async _persist() {
+    try {
+      await this.plugin.saveData(METADATA_FILE, this.data);
+    } catch (err) {
+      throw new SyncError({
+        category: SyncErrorCategory.LOCAL_FILE,
+        code: "METADATA_SAVE_FAILED",
+        operation: "saveMetadata",
+        message: "同步基准保存失败,本轮结果不会被记录: " + String(err && err.message || err),
+        retryable: false,
+        recoverable: true,
+        cause: err
+      });
+    }
+  }
+};
+
+// src/storage/sync-history-store.js
+var HISTORY_FILE = "sync-history.json";
+var HISTORY_LIMIT = 100;
+var SyncHistoryStore = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.entriesByRepo = {};
+    this._loaded = false;
+  }
+  async load() {
+    this._loaded = true;
+    try {
+      const data = await this.plugin.loadData(HISTORY_FILE);
+      if (data && typeof data.entriesByRepo === "object") {
+        this.entriesByRepo = data.entriesByRepo;
+      }
+    } catch (err) {
+      if (err && !/not found|不存在/i.test(String(err.message || err))) {
+        throw new SyncError({
+          category: SyncErrorCategory.LOCAL_FILE,
+          code: "HISTORY_LOAD_FAILED",
+          operation: "loadHistory",
+          message: "同步历史读取失败: " + String(err && err.message || err),
+          recoverable: true,
+          cause: err
+        });
+      }
+    }
+    return this.entriesByRepo;
+  }
+  list(repoKey) {
+    return this.entriesByRepo[repoKey] || [];
+  }
+  /**
+   * 追加一条历史。同一 operationId 只记录一条(重复触发合并时去重)。
+   */
+  async append(repoKey, entry) {
+    const record = {
+      id: entry.operationId,
+      trigger: entry.trigger || "",
+      startedAt: entry.startedAt || "",
+      finishedAt: entry.finishedAt || (/* @__PURE__ */ new Date()).toISOString(),
+      state: entry.state || "",
+      phase: entry.phase || "",
+      baseCommit: entry.baseCommit || null,
+      expectedRemoteHead: entry.expectedRemoteHead || null,
+      result: entry.result || null,
+      error: entry.error || null,
+      conflictCount: entry.conflictCount || 0
+    };
+    const list = this.entriesByRepo[repoKey] || (this.entriesByRepo[repoKey] = []);
+    const dedupIdx = list.findIndex((e) => e.id === record.id);
+    if (dedupIdx >= 0) list.splice(dedupIdx, 1);
+    list.push(record);
+    while (list.length > HISTORY_LIMIT) list.shift();
+    await this._persist();
+    return record;
+  }
+  async _persist() {
+    try {
+      await this.plugin.saveData(HISTORY_FILE, { entriesByRepo: this.entriesByRepo });
+    } catch (err) {
+      throw new SyncError({
+        category: SyncErrorCategory.LOCAL_FILE,
+        code: "HISTORY_SAVE_FAILED",
+        operation: "saveHistory",
+        message: "同步历史保存失败: " + String(err && err.message || err),
+        recoverable: true,
+        cause: err
+      });
+    }
+  }
+};
+
+// src/storage/local-manifest-store.js
+var MANIFEST_FILE = "local-manifest.json";
+var LocalManifestStore = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.paths = /* @__PURE__ */ new Set();
+    this.savedAt = "";
+  }
+  async load() {
+    try {
+      const data = await this.plugin.loadData(MANIFEST_FILE);
+      this.paths = new Set(data && data.paths || []);
+      this.savedAt = data && data.savedAt || "";
+    } catch (err) {
+      console.warn("[SY-GSP] 本地清单加载失败(删除判定将进入安全模式):", err && err.message);
+      this.paths = /* @__PURE__ */ new Set();
+    }
+    return this;
+  }
+  has(path) {
+    return this.paths.has(String(path));
+  }
+  get size() {
+    return this.paths.size;
+  }
+  /** 用最新扫描结果整体替换 */
+  async replaceAll(paths) {
+    this.paths = new Set((paths || []).map((p) => String(p)));
+    this.savedAt = (/* @__PURE__ */ new Date()).toISOString();
+    await this.plugin.saveData(MANIFEST_FILE, { paths: [...this.paths], savedAt: this.savedAt });
+  }
+  /** 清空(仓库/分支切换、用户重置时) */
+  async clear() {
+    this.paths = /* @__PURE__ */ new Set();
+    this.savedAt = (/* @__PURE__ */ new Date()).toISOString();
+    await this.plugin.saveData(MANIFEST_FILE, { paths: [], savedAt: this.savedAt });
+  }
+};
+
+// src/storage/migration.js
+var LEGACY_STORAGE_DIR = "data/storage/petal/SGSP";
+var LEGACY_FILES = {
+  platform: "plugin_config_platform.json",
+  github: "plugin_config_git_sync_github.json",
+  gitee: "plugin_config_git_sync_gitee.json"
+};
+var MIGRATABLE_KEYS = [
+  "upload_platform",
+  "upload_sub_platform",
+  "repository_address",
+  "repository_branch",
+  "submit_token",
+  "submit_user_email",
+  "ignore_file",
+  "asset_prefix",
+  "enabled_sync",
+  "sync_conflict_file",
+  "sync_range",
+  "sync_strategy",
+  "sync_file_type",
+  "sync_mode",
+  "sync_interval"
+];
+var Migration = class {
+  /**
+   * @param {object} kernel 内核 API
+   * @param {object} settings SettingsPanel 实例(set/setAndSave/get)
+   * @param {object} metadataStore SyncMetadataStore
+   */
+  constructor(kernel, settings, metadataStore) {
+    this.kernel = kernel;
+    this.settings = settings;
+    this.metadataStore = metadataStore;
+  }
+  async _readLegacyJson(name) {
+    const path = LEGACY_STORAGE_DIR + "/" + name;
+    const blob = await this.kernel.getFile(path);
+    if (!blob) return null;
+    const text = await blob.text();
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      throw new Error("旧版配置解析失败(" + name + "): " + String(err && err.message || err));
+    }
+  }
+  /**
+   * 执行迁移。返回报告 {migratedKeys, repoKey, legacyHint, errors[]}。
+   * 不触发任何远端写入;成功后仍要求用户走只读诊断 + 首次写入预览。
+   */
+  async migrate({ provider, owner, repo, branch }) {
+    const report = { migratedKeys: [], repoKey: "", legacyHint: null, errors: [] };
+    const platformCfg = {};
+    const gitCfg = {};
+    let platformFound = false;
+    let gitFound = false;
+    try {
+      const raw = await this._readLegacyJson(LEGACY_FILES.platform);
+      if (raw && typeof raw === "object") {
+        Object.assign(platformCfg, raw);
+        platformFound = true;
+      }
+    } catch (err) {
+      report.errors.push(String(err.message || err));
+    }
+    try {
+      const fileName = provider === "gitee" ? LEGACY_FILES.gitee : LEGACY_FILES.github;
+      const raw = await this._readLegacyJson(fileName);
+      if (raw && typeof raw === "object") {
+        Object.assign(gitCfg, raw);
+        gitFound = true;
+      }
+    } catch (err) {
+      report.errors.push(String(err.message || err));
+    }
+    if (!platformFound && !gitFound) return report;
+    platformCfg.upload_platform = 0;
+    platformCfg.upload_sub_platform = provider === "gitee" ? 1 : 0;
+    for (const [cfg, prefix] of [
+      [platformCfg, "platform."],
+      [gitCfg, "git."]
+    ]) {
+      for (const key of Object.keys(cfg)) {
+        const value = cfg[key];
+        if (value === void 0 || value === null) continue;
+        if (typeof value !== "number" && !MIGRATABLE_KEYS.includes(key)) continue;
+        try {
+          await this.settings.setAndSave(key, value);
+          report.migratedKeys.push(prefix + key);
+        } catch (err) {
+          report.errors.push("迁移 " + prefix + key + " 失败: " + String(err && err.message || err));
+        }
+      }
+    }
+    if (gitCfg.latest_commit_sha) {
+      report.legacyHint = {
+        sha: String(gitCfg.latest_commit_sha),
+        time: String(gitCfg.latest_commit_time || "")
+      };
+      try {
+        const repoKey = this.metadataStore.constructor.keyOf({ provider, owner, repo, branch });
+        await this.metadataStore.setLegacyHint(repoKey, report.legacyHint);
+      } catch (err) {
+        report.errors.push("记录旧基准线索失败: " + String(err && err.message || err));
+      }
+    }
+    return report;
+  }
+};
+
+// src/util/event-bus.js
 function createEventBus() {
   const handlers = {};
   return {
-    on: function (name, fn) {
+    on(name, fn) {
       if (!handlers[name]) handlers[name] = [];
       handlers[name].push(fn);
       return this;
     },
-    off: function (name, fn) {
+    off(name, fn) {
       const list = handlers[name];
       if (list) {
         for (let i = list.length - 1; i >= 0; i--) {
@@ -193,1219 +3581,2202 @@ function createEventBus() {
       }
       return this;
     },
-    emit: function (name, payload) {
+    emit(name, payload) {
       const list = handlers[name] || [];
       for (let i = 0; i < list.length; i++) {
         try {
           list[i](payload);
         } catch (e) {
-          /* 订阅者异常不影响主流程 */
         }
       }
       return this;
-    },
+    }
   };
 }
 
-/** 从错误链(cause 链)中查找是否包含冲突错误(Mr 的 code===300) */
-function isConflictError(err, depth) {
-  let node = err;
-  for (let i = 0; node && i < (depth || 7); i++) {
-    if (node.code === CONFLICT_CODE) {
-      return true;
-    }
-    node = node.cause;
-  }
-  return false;
-}
-
-/**
- * 从错误链中提取冲突信息(路径/消息)。
- * M1 增强: 收集 cause 链中**所有** code===300 的节点,返回 conflicts 列表与数量;
- * 同时保留旧字段 path/message/name(取第一个冲突),兼容既有调用与测试。
- */
-function extractConflictInfo(err) {
-  const conflicts = [];
-  let node = err;
-  for (let i = 0; node && i < 7; i++) {
-    if (node.code === CONFLICT_CODE) {
-      conflicts.push({
-        path: node.path || "",
-        message: node.message || "",
-        name: node.name || "CONFLICT",
-      });
-    }
-    node = node.cause;
-  }
-  if (conflicts.length === 0) {
-    return {
-      path: "",
-      message: String((err && err.message) || err),
-      name: "",
-      conflicts: [],
-      conflictCount: 0,
-    };
-  }
-  const first = conflicts[0];
-  return {
-    path: first.path,
-    message: first.message,
-    name: first.name,
-    conflicts: conflicts,
-    conflictCount: conflicts.length,
-  };
-}
-
-function escapeHtml(str) {
-  return String(str == null ? "" : str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/**
- * 错误摘要(M1 增强): 遍历**完整** cause 链,同时保留:
- *  - 最外层 HTTP 状态(第一个出现的 status);
- *  - 最具体文件路径(第一个出现的 path);
- *  - 最底层消息(链末端节点的 response.data.message / message)。
- * 不再「遇到第一个带 status 的节点就返回」,避免丢失更具体的底层信息。
- */
-function getErrorSummary(err) {
-  let node = err;
-  let status = 0;
-  let path = "";
-  let message = "";
-  let fallback = "";
-  for (let i = 0; node && i < 7; i++) {
-    if (!status) {
-      const st = node.status || (node.response && node.response.status) || 0;
-      if (st) status = st;
-    }
-    if (!path && node.path) path = node.path;
-    const data = (node.response && node.response.data) || {};
-    const m = data.message || node.message || "";
-    if (m) message = String(m);
-    if (!fallback && node.message) fallback = String(node.message);
-    node = node.cause;
-  }
-  return {
-    message: message || fallback || String((err && err.message) || err || "未知错误"),
-    status: status || 0,
-    path: path || "",
-  };
-}
-
-/** 脱敏: 隐藏 token / 密码 / Authorization 头等敏感信息 */
-function redactText(text) {
-  return String(text == null ? "" : text)
-    .replace(/Bearer\s+[^\s]+/gi, "Bearer [已隐藏]")
-    .replace(/(token|password|authorization|cookie)\s*[:=]\s*[^,;\s]+/gi, "$1=[已隐藏]");
-}
-
-function formatErrorSummary(err) {
-  const summary = getErrorSummary(err);
-  const message = redactText(summary.message);
-  let output = message;
-  if (summary.status) output = "HTTP " + summary.status + ": " + output;
-  if (summary.path) output += " (文件: " + summary.path + ")";
-  return output.slice(0, 500);
-}
-
-/**
- * 创建冲突处理宿主(每个插件实例一个)。
- * @param {object} plugin 插件实例(q.Plugin 子类)
- * @param {object} q      siyuan SDK
- */
-function createSyncFlowHost(plugin, q) {
-  const host = {
-    plugin: plugin,
-    q: q,
-    state: SyncState.IDLE,
-    conflictDetail: null,
-    pausedSince: 0,
-    // 自动同步定时器打上的一次性标记: 区分「定时器触发」与「用户手动点击」
-    autoTick: false,
-    autoSkipNotified: false,
-    // 本次暂停是否由自动同步定时器引起(决定恢复时是否需要重启定时器)
-    pausedTimer: false,
-    // 当前是否处于「冲突中 → 用户选择解决方案」的流程
-    wasConflictFlow: false,
-    // 当前冲突弹窗
-    dialog: null,
-    restorePromise: null,
-    logEntries: [],
-    // M1: 同步历史(环形,重启后可查)与事件总线
-    history: [],
-    operationSeq: 0,
-    currentOperationId: "",
-    events: createEventBus(),
-    // M1.1: 本次同步的文件操作统计(patch 在 addFileToWorkArea 注入 trackFile 填充)
-    syncStats: { create: [], update: [], delete: [] },
-  };
-
-  function i18n(key, fallback) {
-    try {
-      const v = plugin && plugin.i18n ? plugin.i18n[key] : undefined;
-      return v === undefined || v === null || v === "" ? fallback : v;
-    } catch (e) {
-      return fallback;
+// src/plugin/repo-address.js
+function parseRepoAddress(addr) {
+  const cleaned = String(addr == null ? "" : addr).trim().replace(/\.git$/, "");
+  const patterns = [
+    /^(?:https?:\/\/|git:\/\/)?([^/:]+)\/([^/]+)\/([^/]+)$/,
+    /^git@([^:]+):([^/]+)\/(.+)$/
+  ];
+  for (const re of patterns) {
+    const m = re.exec(cleaned);
+    if (m) {
+      return { host: m[1], owner: m[2], repo: m[3].replace(/\.git$/, "") };
     }
   }
+  return { host: "", owner: "", repo: "" };
+}
 
-  function addLog(level, message) {
-    const entry = {
-      time: new Date().toISOString(),
-      level: level || "info",
-      message: String(message == null ? "" : message),
-    };
-    host.logEntries.push(entry);
-    if (host.logEntries.length > 200) host.logEntries.shift();
-    return entry;
-  }
-
-  /** 生成一次同步的 operationId(贯通通知/历史/日志) */
-  function nextOperationId() {
-    host.operationSeq += 1;
-    return "sync-" + Date.now() + "-" + host.operationSeq;
-  }
-
-  /** 发送同步事件(订阅者异常不影响主流程) */
-  function emitSync(name, payload) {
-    try {
-      host.events.emit(name, payload);
-    } catch (e) {
-      /* ignore */
-    }
-  }
-
-  /** 读取「成功时通知」开关(默认开) */
-  function isSyncNotifyEnabled() {
-    try {
-      const v = plugin && plugin.settingUtils ? plugin.settingUtils.get("sgsp_sync_notify") : undefined;
-      return v === undefined || v === null || v === "" ? true : !!v;
-    } catch (e) {
-      return true;
-    }
-  }
-
+// src/ui/settings-panel.js
+var PLATFORM_CONFIG_FILES = {
+  github: "plugin_config_git_sync_github",
+  gitee: "plugin_config_git_sync_gitee"
+};
+var SETTING_DEFAULTS = Object.freeze({
+  upload_platform: 0,
+  upload_sub_platform: 0,
+  repository_address: "",
+  repository_branch: "",
+  submit_token: "",
+  submit_user_email: "",
+  ignore_file: "",
+  asset_prefix: "",
+  enabled_sync: true,
+  sync_conflict_file: true,
+  sync_range: 0,
+  sync_strategy: 0,
+  sync_file_type: 0,
+  sync_mode: 0,
+  sync_interval: 6e5,
+  // SY-GSP 新增
+  sygsp_auto_retry: false,
+  sygsp_success_notify: true,
+  sygsp_blob_request_limit: 33554432
+  // 32MB
+});
+var PER_PLATFORM_KEYS = Object.freeze([
+  "repository_address",
+  "repository_branch",
+  "submit_token",
+  "submit_user_email"
+]);
+var SettingUtils = class {
   /**
-   * 记录本次同步的一个文件操作(patch 在 addFileToWorkArea 注入调用)。
-   * op: "create" | "update" | "delete"; path: 文件路径。
-   * 每类最多保留 100 条,防止超大同步刷爆内存。
+   * @param {object} opts {plugin, name, width, height, confirmCallback, destroyCallback}
    */
-  function trackFile(op, path) {
-    try {
-      if (!host.syncStats) {
-        host.syncStats = { create: [], update: [], delete: [] };
+  constructor(opts) {
+    this.plugin = opts.plugin;
+    this.name = opts.name || "settings";
+    this.file = this.name.endsWith(".json") ? this.name : this.name + ".json";
+    this.settings = /* @__PURE__ */ new Map();
+    this.elements = /* @__PURE__ */ new Map();
+    const q2 = opts.q;
+    this.plugin.setting = new q2.Setting({
+      width: opts.width,
+      height: opts.height,
+      confirmCallback: () => {
+        for (const key of this.settings.keys()) this.updateValueFromElement(key);
+        this.save();
+        if (opts.confirmCallback) opts.confirmCallback(this.dump());
+      },
+      destroyCallback: () => {
+        if (opts.destroyCallback) opts.destroyCallback();
+        for (const key of this.settings.keys()) this.updateElementFromValue(key);
       }
-      const key = op === "create" ? "create" : op === "delete" ? "delete" : "update";
-      const list = host.syncStats[key];
-      if (list && path && list.length < 100) {
-        list.push(String(path));
-      }
-    } catch (e) {
-      /* 统计失败不影响同步主流程 */
-    }
+    });
   }
-
-  /**
-   * 生成「本次同步文件」明细行(patch 注入的 trackFile 数据)。
-   * 每类最多列出前 5 个路径,超出以「等 N 个」省略。
-   */
-  function buildFileStatsText() {
-    const stats = host.syncStats || { create: [], update: [], delete: [] };
-    const parts = [];
-    const cats = [
-      ["create", i18n("gSyncCreatedLabel", "新增")],
-      ["update", i18n("gSyncUpdatedLabel", "更新")],
-      ["delete", i18n("gSyncDeletedLabel", "删除")],
-    ];
-    for (let idx = 0; idx < cats.length; idx++) {
-      const list = stats[cats[idx][0]] || [];
-      if (list.length > 0) {
-        parts.push(
-          cats[idx][1] +
-            " " +
-            list.length +
-            " 个 (" +
-            list.slice(0, 5).join(", ") +
-            (list.length > 5 ? " 等" : "") +
-            ")"
-        );
+  async load() {
+    const data = await this.plugin.loadData(this.file);
+    if (data) {
+      for (const [key, item] of this.settings) {
+        if (data[key] !== void 0 && data[key] !== null) item.value = data[key];
       }
     }
-    return parts.length > 0
-      ? i18n("gSyncFilesDetailLabel", "本次同步文件") + ": " + parts.join("; ")
-      : "";
+    return data || null;
   }
-
-  /** 记录一条同步历史并持久化(环形保留,失败可观测) */
-  function addHistoryEntry(entry) {
-    const item = {
-      operationId: entry.operationId || host.currentOperationId || "",
-      time: new Date().toISOString(),
-      state: entry.state || host.state || "",
-      category: entry.category || "",
-      message: String(entry.message == null ? "" : entry.message).slice(0, 300),
-      fileCount: entry.fileCount || 0,
-      retries: entry.retries || 0,
-    };
-    host.history.push(item);
-    if (host.history.length > HISTORY_LIMIT) host.history.shift();
-    emitSync("sync:history", item);
-    try {
-      plugin
-        .saveData(HISTORY_FILE, { entries: host.history })
-        .catch(function (err) {
-          addLog("error", "同步历史保存失败: " + ((err && err.message) || err));
-          notify(i18n("gSyncHistorySaveFailed", "⚠️ 同步历史保存失败"), "error");
-        });
-    } catch (e) {
-      addLog("error", "同步历史保存失败: " + ((e && e.message) || e));
+  async save(value) {
+    return this.plugin.saveData(this.file, value || this.dump());
+  }
+  get(key) {
+    const item = this.settings.get(key);
+    return item ? item.value : void 0;
+  }
+  set(key, value) {
+    const item = this.settings.get(key);
+    if (item) {
+      item.value = value;
+      this.updateElementFromValue(key);
     }
   }
-
-  function notify(msg, type) {
-    addLog(type === "error" ? "error" : "info", msg);
-    try {
-      q.showMessage(msg, 3000, type || "info");
-    } catch (e) {
-      /* 通知失败不影响主流程 */
-    }
+  async setAndSave(key, value) {
+    this.set(key, value);
+    await this.save();
   }
-
-  /** 打开运行日志面板(每 1 秒自动刷新,同步进行中的新条目会实时出现) */
-  function showRuntimeLogs() {
-    let dialog = null;
-    let closed = false;
-    // 构建条目 HTML(空日志给出占位提示)
-    const buildRows = function () {
-      return host.logEntries.length
-        ? host.logEntries
-            .map(function (entry) {
-              return "<div><strong>[" + escapeHtml(entry.level.toUpperCase()) + "] " + escapeHtml(entry.time) + "</strong> " + escapeHtml(entry.message) + "</div>";
-            })
-            .join("")
-        : "<div>暂无运行日志</div>";
-    };
-    // 渲染一帧: 重建条目 HTML
-    const render = function () {
-      try {
-        if (!closed && dialog && dialog.element && dialog.element.querySelector) {
-          const box = dialog.element.querySelector("#gSyncRuntimeLogBox");
-          if (box) box.innerHTML = buildRows();
+  take(key) {
+    const item = this.settings.get(key);
+    return item ? item.value : void 0;
+  }
+  disable(key) {
+    const el = this.elements.get(key);
+    if (el) el.disabled = true;
+  }
+  enable(key) {
+    const el = this.elements.get(key);
+    if (el) el.disabled = false;
+  }
+  dump() {
+    const data = {};
+    for (const [key, item] of this.settings) {
+      if (item.type !== "button") data[key] = item.value;
+    }
+    return data;
+  }
+  /** 声明一个设置项并挂到思源 Setting 面板 */
+  addItem(item) {
+    this.settings.set(item.key, item);
+    const element = this.createElement(item);
+    this.elements.set(item.key, element);
+    this.plugin.setting.addItem({
+      title: item.title,
+      description: item.description,
+      direction: item.direction || "rows",
+      createActionElement: () => element
+    });
+    return element;
+  }
+  updateValueFromElement(key) {
+    const item = this.settings.get(key);
+    const el = this.elements.get(key);
+    if (!item || !el) return;
+    if (item.type === "checkbox") item.value = el.checked;
+    else if (item.type === "slider") item.value = Number(el.value);
+    else if (item.type === "number") item.value = Number(el.value);
+    else if (item.type !== "button" && item.type !== "hint") item.value = el.value;
+  }
+  updateElementFromValue(key) {
+    const item = this.settings.get(key);
+    const el = this.elements.get(key);
+    if (!item || !el) return;
+    if (item.type === "checkbox") el.checked = !!item.value;
+    else if (item.type === "select") el.value = String(item.value);
+    else if (item.type !== "button" && item.type !== "hint") el.value = item.value === void 0 || item.value === null ? "" : String(item.value);
+  }
+  createElement(item) {
+    let el;
+    switch (item.type) {
+      case "select": {
+        el = document.createElement("select");
+        el.className = "b3-select fn__flex-center fn__size200";
+        for (const [value, label] of Object.entries(item.options || {})) {
+          const opt = document.createElement("option");
+          opt.value = value;
+          opt.textContent = label;
+          el.appendChild(opt);
         }
-      } catch (e) {
-        /* 面板已关闭或宿主 DOM 不支持时忽略 */
+        el.value = String(item.value);
+        break;
       }
-    };
-    try {
-      dialog = new q.Dialog({
-        title: i18n("gSyncRuntimeLogsTitle", "SGSP 运行日志"),
-        content:
-          '<div class="fn__flex-column" id="gSyncRuntimeLogBox" style="height:100%;overflow:auto;padding:8px;font-family:monospace;white-space:pre-wrap;">' +
-          buildRows() +
-          "</div>",
-        width: "80vw",
-        height: "70vh",
-        destroyCallback: function () {
-          closed = true;
-        },
-      });
-    } catch (err) {
-      addLog("error", "打开运行日志失败: " + (err && err.message ? err.message : err));
-      try { q.showMessage("❌ 无法打开 SGSP 运行日志", 3000, "error"); } catch (e) {}
-      return;
+      case "checkbox": {
+        el = document.createElement("input");
+        el.type = "checkbox";
+        el.className = "b3-switch fn__flex-center";
+        el.checked = !!item.value;
+        break;
+      }
+      case "slider": {
+        el = document.createElement("input");
+        el.className = "b3-slider fn__flex-center fn__size200";
+        el.type = "range";
+        el.min = item.min;
+        el.max = item.max;
+        el.step = item.step || 1;
+        el.value = item.value;
+        break;
+      }
+      case "number": {
+        el = document.createElement("input");
+        el.className = "b3-text-field fn__flex-center fn__size200";
+        el.type = "number";
+        el.value = item.value;
+        break;
+      }
+      case "textarea": {
+        el = document.createElement("textarea");
+        el.className = "b3-text-field fn__block";
+        el.value = item.value === void 0 || item.value === null ? "" : String(item.value);
+        if (item.placeholder) el.placeholder = item.placeholder;
+        break;
+      }
+      case "hint": {
+        el = document.createElement("div");
+        el.className = "b3-label__text";
+        el.textContent = item.value || "";
+        break;
+      }
+      case "button": {
+        el = document.createElement("button");
+        el.className = "b3-button b3-button--outline";
+        el.textContent = item.title || "";
+        if (item.action && item.action.callback) el.addEventListener("click", item.action.callback);
+        break;
+      }
+      default: {
+        el = document.createElement("input");
+        el.className = "b3-text-field fn__flex-center fn__size200";
+        el.type = "text";
+        el.value = item.value === void 0 || item.value === null ? "" : String(item.value);
+        if (item.placeholder) el.placeholder = item.placeholder;
+        break;
+      }
     }
-    // 实时刷新循环(面板关闭后停止,避免泄漏)
-    const tick = function () {
-      if (closed) return;
-      render();
-      setTimeout(tick, 1000);
-    };
-    setTimeout(tick, 1000);
+    if (item.action && item.action.callback && item.type !== "button") {
+      el.addEventListener("change", () => {
+        this.updateValueFromElement(item.key);
+        item.action.callback();
+      });
+    }
+    return el;
   }
+};
 
-  function setBadge() {
-    const el = plugin.topBarElement;
+// src/ui/settings-builder.js
+var SettingsPanelBuilder = class {
+  /**
+   * @param {object} deps {plugin, q, i18n, onPlatformChanged(platform), onRepoFieldChanged(), metadataStore}
+   */
+  constructor(deps) {
+    this.plugin = deps.plugin;
+    this.q = deps.q;
+    this.i18n = deps.i18n;
+    this.onPlatformChanged = deps.onPlatformChanged;
+    this.onRepoFieldChanged = deps.onRepoFieldChanged;
+    this.metadataStore = deps.metadataStore;
+  }
+  currentPlatform() {
+    return this.utils && Number(this.utils.get("upload_sub_platform")) === 1 ? "gitee" : "github";
+  }
+  async build() {
+    const t = this.i18n;
+    this.utils = new SettingUtils({
+      plugin: this.plugin,
+      q: this.q,
+      name: "settings",
+      confirmCallback: () => {
+        if (this.onRepoFieldChanged) this.onRepoFieldChanged();
+      }
+    });
+    this._registerItems(t);
+    await this.utils.load();
+    const platform = this.currentPlatform();
+    const platformFile = PLATFORM_CONFIG_FILES[platform] + ".json";
+    const saved = await this.plugin.loadData(platformFile);
+    for (const key of PER_PLATFORM_KEYS) {
+      if (saved && saved[key] !== void 0 && saved[key] !== null) this.utils.set(key, saved[key]);
+    }
+    this._platformFile = platformFile;
+    this._refreshBaseHints();
+    return this.utils;
+  }
+  _registerItems(t) {
+    const u = this.utils;
+    const val = (key) => {
+      const current = u.get(key);
+      return current === void 0 ? SETTING_DEFAULTS[key] : current;
+    };
+    u.addItem({
+      key: "upload_platform",
+      type: "select",
+      value: val("upload_platform"),
+      title: t.platformType,
+      description: t.platformTypeDesc,
+      options: { 0: t.platform && t.platform.git || "Git 仓库" },
+      action: { callback: () => {
+      } }
+    });
+    u.addItem({
+      key: "upload_sub_platform",
+      type: "select",
+      value: val("upload_sub_platform"),
+      title: t.subGitPlatformType,
+      description: t.subGitplatformTypeDesc,
+      options: {
+        0: t.platform && t.platform.subPlatform && t.platform.subPlatform.git.githubAPI || "GitHub API",
+        1: t.platform && t.platform.subPlatform && t.platform.subPlatform.git.giteeAPI || "Gitee API"
+      },
+      action: {
+        callback: async () => {
+          const next = Number(u.take("upload_sub_platform"));
+          await this._savePlatformFile();
+          const nextFile = PLATFORM_CONFIG_FILES[next === 1 ? "gitee" : "github"] + ".json";
+          const data = await this.plugin.loadData(nextFile) || {};
+          for (const key of PER_PLATFORM_KEYS) u.set(key, data[key] !== void 0 ? data[key] : "");
+          this._platformFile = nextFile;
+          await this.utils.save();
+          if (this.onPlatformChanged) await this.onPlatformChanged();
+        }
+      }
+    });
+    u.addItem({
+      key: "repository_address",
+      type: "textinput",
+      value: val("repository_address"),
+      title: t.gitRepoAddress,
+      placeholder: t.gitRepoAddressPlaceHolder,
+      description: t.gitRepoAddressDesc,
+      action: { callback: () => this._confirmResetBase() }
+    });
+    u.addItem({
+      key: "repository_branch",
+      type: "textinput",
+      value: val("repository_branch"),
+      title: t.gitRepoBranch,
+      placeholder: t.gitRepoBranchPlaceHolder,
+      description: t.gitRepoBranchDesc,
+      action: { callback: () => this._confirmResetBase() }
+    });
+    u.addItem({
+      key: "submit_token",
+      type: "textinput",
+      value: val("submit_token"),
+      title: t.gitTokenORkey,
+      description: t.gitTokenORkeyDesc
+    });
+    u.addItem({
+      key: "submit_user_email",
+      type: "textinput",
+      value: val("submit_user_email"),
+      title: t.gitUserEmail,
+      placeholder: t.gitUserEmailPlaceHolder,
+      description: t.gitUserEmailDesc
+    });
+    u.addItem({
+      key: "ignore_file",
+      type: "textarea",
+      value: val("ignore_file"),
+      title: t.ignoreFile,
+      placeholder: t.ignoreFilePlaceHolder,
+      description: t.ignoreFileDesc
+    });
+    u.addItem({
+      key: "asset_prefix",
+      type: "textarea",
+      value: val("asset_prefix"),
+      title: t.assetPrefix,
+      placeholder: t.assetPrefixPlaceHolder,
+      description: t.assetPrefixDesc
+    });
+    u.addItem({
+      key: "enabled_sync",
+      type: "checkbox",
+      value: val("enabled_sync") !== false,
+      title: t.enableSync,
+      description: t.enableSyncDesc
+    });
+    u.addItem({
+      key: "sync_conflict_file",
+      type: "checkbox",
+      value: val("sync_conflict_file") !== false,
+      title: t.syncGenConflictFile,
+      description: t.syncGenConflictFileDesc
+    });
+    u.addItem({
+      key: "sync_range",
+      type: "select",
+      value: val("sync_range"),
+      title: t.syncRange,
+      description: t.syncRangeDesc,
+      options: { 0: t.workSpace, 1: t.dataFile, 2: t.noteFile }
+    });
+    u.addItem({
+      key: "sync_strategy",
+      type: "select",
+      value: val("sync_strategy"),
+      title: t.syncStrategy,
+      description: t.syncStrategyDesc,
+      options: { 0: t.autoSyncStrategy, 1: t.selectUpload, 2: t.keepRemoteCover, 3: t.keepLocalCover }
+    });
+    u.addItem({
+      key: "sync_file_type",
+      type: "select",
+      value: val("sync_file_type"),
+      title: t.noteType,
+      description: t.noteTypeDesc,
+      options: { 0: t.siyuanFile, 1: t.markdownFile }
+    });
+    u.addItem({
+      key: "sync_mode",
+      type: "select",
+      value: val("sync_mode"),
+      title: t.syncMode,
+      description: t.syncModeDesc,
+      options: { 0: t.autoSync, 1: t.manualSync, 2: t.fullManualSync }
+    });
+    u.addItem({
+      key: "sync_interval",
+      type: "number",
+      value: val("sync_interval"),
+      title: t.syncInterval,
+      description: t.syncIntervalDesc
+    });
+    u.addItem({
+      key: "sygsp_auto_retry",
+      type: "checkbox",
+      value: !!val("sygsp_auto_retry"),
+      title: t.sygspAutoRetryTitle || "自动重试(网络类错误)",
+      description: t.sygspAutoRetryDesc || "仅对网络超时与远端变化类错误有限重试,其余错误不自动重试"
+    });
+    u.addItem({
+      key: "sygsp_success_notify",
+      type: "checkbox",
+      value: val("sygsp_success_notify") !== false,
+      title: t.sygspSuccessNotifyTitle || "自动同步成功时通知",
+      description: t.sygspSuccessNotifyDesc || "关闭后自动同步成功不打扰(手动同步始终提示)"
+    });
+    u.addItem({
+      key: "latest_commit_sha",
+      type: "hint",
+      value: t.noCommitFile || "暂无提交",
+      title: t.latestCommitSha,
+      description: t.latestCommitShaDesc,
+      direction: "rows"
+    });
+    u.addItem({
+      key: "latest_commit_time",
+      type: "hint",
+      value: "",
+      title: t.latestCommitTime,
+      description: t.latestCommitTimeDesc,
+      direction: "rows"
+    });
+  }
+  /** 载入完成后刷新基准展示项 */
+  _refreshBaseHints() {
+    if (!this.utils || !this.metadataStore) return;
+    const info = this._parsedRepo();
+    const repoKey = this.metadataStore.constructor.keyOf({
+      provider: this.currentPlatform(),
+      owner: info.owner,
+      repo: info.repo,
+      branch: this.utils.get("repository_branch") || ""
+    });
+    const base = repoKey ? this.metadataStore.get(repoKey) : null;
+    this.utils.set(
+      "latest_commit_sha",
+      base && base.lastConfirmedCommit ? base.lastConfirmedCommit : this.i18n.noCommitFile || "暂无提交"
+    );
+    this.utils.set("latest_commit_time", base && base.lastSuccessfulAt ? base.lastSuccessfulAt : "");
+  }
+  async _confirmResetBase() {
+    const t = this.i18n;
+    const q2 = this.q;
+    const key = "latest_commit_sha";
+    const hasBase = this.metadataStore && Object.keys(this.metadataStore.data.repositories || {}).length > 0;
+    if (hasBase && q2 && q2.confirm) {
+      q2.confirm(t.confirm_title_info, t.confirm_modifyrepo_reset_commit, async () => {
+        if (this.metadataStore) {
+          const info = this._parsedRepo();
+          const repoKey = this.metadataStore.constructor.keyOf({
+            provider: this.currentPlatform(),
+            owner: info.owner,
+            repo: info.repo,
+            branch: this.utils.get("repository_branch") || ""
+          });
+          await this.metadataStore.clear(repoKey);
+        }
+      });
+    }
+  }
+  async _savePlatformFile() {
+    if (!this._platformFile) return;
+    const data = {};
+    for (const key of PER_PLATFORM_KEYS) data[key] = this.utils.get(key);
+    await this.plugin.saveData(this._platformFile, data);
+  }
+  /** 持久化当前平台配置(平台切换/关闭设置时调用) */
+  async persistPlatformConfig() {
+    await this._savePlatformFile();
+    await this.utils.save();
+  }
+  /** 解析仓库地址 → {owner, repo} */
+  _parsedRepo() {
+    const addr = String(this.utils ? this.utils.get("repository_address") : "");
+    return parseRepoAddress(addr);
+  }
+};
+
+// src/ui/notification-service.js
+var NotificationService = class {
+  constructor({ q: q2, i18n, stateFile = "notify-state.json" } = {}) {
+    this.q = q2;
+    this.i18n = i18n;
+    this.topBarElement = null;
+    this._lastToastText = "";
+    this._autoFailNotified = false;
+  }
+  setTopBarElement(el) {
+    this.topBarElement = el;
+  }
+  /** 基础 toast(带同文案去重) */
+  toast(text, type = "info", timeout = 3e3) {
+    if (!this.q || typeof this.q.showMessage !== "function") return;
+    if (text && text === this._lastToastText) return;
+    this._lastToastText = text;
+    setTimeout(() => {
+      if (text === this._lastToastText) this._lastToastText = "";
+    }, timeout + 1e3);
+    this.q.showMessage(text, timeout, type);
+  }
+  /** 手动触发: 开始同步始终可见 */
+  syncStarted(trigger) {
+    if (trigger === "automatic") return;
+    this.toast(this.i18n && this.i18n.gSyncStartMsg || "🔄 开始同步…", "info");
+    this._badge("syncing");
+  }
+  syncSuccess(result, { automatic = false, successNotify = true } = {}) {
+    const detail = result ? " (↑" + (result.uploads || 0) + " ↓" + (result.downloads || 0) + " 删远" + (result.deletionsRemote || 0) + " 删本" + (result.deletionsLocal || 0) + ")" : "";
+    if (automatic) {
+      if (successNotify) this.toast(this.i18n && this.i18n.gSyncSuccessMsg || "✅ 同步成功" + detail, "info");
+    } else {
+      this.toast(this.i18n && this.i18n.gSyncSuccessMsg || "✅ 同步成功" + detail, "info");
+    }
+    this._badge("success");
+  }
+  syncError(syncErr, { automatic = false } = {}) {
+    const summary = syncErr && syncErr.toDisplayText ? syncErr.toDisplayText() : String(syncErr && syncErr.message || syncErr);
+    if (automatic && this._autoFailNotified && this._lastAutoFailCategory === syncErr.category) {
+    } else {
+      this._autoFailNotified = automatic || this._autoFailNotified;
+      this._lastAutoFailCategory = syncErr.category;
+      this.toast("❌ " + summary, "error", 6e3);
+    }
+    this._badge("error");
+  }
+  conflictPaused({ kind, conflictCount, reason } = {}) {
+    const isBase = kind === "BASE_UNRESOLVED";
+    const text = isBase ? this.i18n && this.i18n.sygspBaseUnresolvedMsg || "🔴 同步基准无法确认,自动同步已暂停,请打开插件菜单处理" : this.i18n && this.i18n.gSyncConflictMsg || "🔴 检测到同步冲突,自动同步已暂停";
+    this.toast(conflictCount ? text + "(" + conflictCount + " 个文件)" : text, "error", 6e3);
+    this._badge("conflict");
+  }
+  conflictResolved() {
+    this.toast(this.i18n && this.i18n.gSyncResolvedMsg || "✅ 冲突已处理,自动同步已恢复", "info");
+    this._badge("success");
+  }
+  pausedAutoSkip() {
+    this.toast(this.i18n && this.i18n.gSyncPausedMsg || "⚠️ 同步冲突未解决,自动同步已暂停,请处理冲突", "error");
+  }
+  _badge(kind) {
+    const el = this.topBarElement;
     if (!el || !el.classList) return;
-    try {
-      if (host.state === SyncState.CONFLICT_PAUSED) {
-        el.classList.add("git-sync-conflict-paused");
-        el.title = i18n(
-          "gSyncPausedTooltip",
-          "【SGSP】冲突未解决,自动同步已暂停,请点击处理"
-        );
-      } else {
-        el.classList.remove("git-sync-conflict-paused");
-        const base = i18n("addTopBarIcon", "SGSP");
-        if (base) el.title = base;
+    el.classList.remove("git-syncing", "git-sync-success", "git-sync-failed", "git-sync-conflict-paused");
+    if (kind === "syncing") el.classList.add("git-syncing");
+    else if (kind === "success") el.classList.add("git-sync-success");
+    else if (kind === "error") el.classList.add("git-sync-failed");
+    else if (kind === "conflict") el.classList.add("git-sync-conflict-paused");
+  }
+};
+
+// src/ui/conflict-dialog.js
+var ConflictDialog = class {
+  /**
+   * @param {object} deps {q, i18n, conflictService, onDecide(async decisionsMap), notify}
+   */
+  constructor(deps) {
+    this.q = deps.q;
+    this.i18n = deps.i18n;
+    this.conflictService = deps.conflictService;
+    this.onDecide = deps.onDecide;
+    this.notify = deps.notify;
+    this.dialog = null;
+    this.set = null;
+  }
+  /** 展示一个冲突集;conflictSet 为 ConflictService.saveSet 返回值 */
+  show(conflictSet) {
+    const q2 = this.q;
+    this.set = conflictSet;
+    const t = this.i18n;
+    this.dialog = new q2.Dialog({
+      title: t && t.gSyncConflictTitle || "⚠️ 检测到同步冲突",
+      content: '<div id="sygspConflictDialog" class="fn__flex-column" style="padding:16px;gap:8px;"></div>',
+      width: "720px",
+      height: "60vh",
+      destroyCallback: () => {
+        this.dialog = null;
       }
-    } catch (e) {
-      /* badge 失败不影响主流程 */
+    });
+    const root = this.dialog.element.querySelector("#sygspConflictDialog");
+    this._render(root, conflictSet);
+  }
+  close() {
+    if (this.dialog) {
+      this.dialog.destroy();
+      this.dialog = null;
     }
   }
-
-  function persist() {
+  _render(root, set) {
+    const t = this.i18n;
+    root.textContent = "";
+    const desc = document.createElement("div");
+    desc.className = "b3-label__text";
+    desc.textContent = t && t.gSyncConflictDesc || "本地与远端的数据同时被修改,自动同步已暂停。请选择处理方式:";
+    root.appendChild(desc);
+    const count = document.createElement("div");
+    count.className = "ft__on-surface";
+    count.textContent = t && t.sygspConflictCount || "冲突文件: " + set.conflicts.length;
+    root.appendChild(count);
+    const list = document.createElement("div");
+    list.className = "fn__flex-1";
+    list.style.overflow = "auto";
+    for (const conflict of set.conflicts) {
+      list.appendChild(this._conflictRow(conflict));
+    }
+    root.appendChild(list);
+    root.appendChild(this._actionBar(set));
+  }
+  _conflictRow(conflict) {
+    const t = this.i18n;
+    const row = document.createElement("div");
+    row.className = "b3-label";
+    row.dataset.path = conflict.path;
+    const pathLine = document.createElement("div");
+    pathLine.className = "fn__flex";
+    pathLine.style.alignItems = "center";
+    const name = document.createElement("span");
+    name.className = "fn__flex-1 ft__breakword";
+    name.textContent = conflict.path;
+    pathLine.appendChild(name);
+    row.appendChild(pathLine);
+    const reason = document.createElement("div");
+    reason.className = "b3-label__text";
+    reason.textContent = conflict.reason || "";
+    row.appendChild(reason);
+    const buttons = document.createElement("div");
+    buttons.className = "fn__flex fn__flex-wrap";
+    buttons.style.gap = "8px";
+    buttons.appendChild(this._btn(t && t.gSyncKeepLocal || "保留本地版本", () => this._decideOne(conflict.path, "keep_local")));
+    buttons.appendChild(this._btn(t && t.gSyncKeepRemote || "保留远端版本", () => this._decideOne(conflict.path, "keep_remote")));
+    if (conflict.snapshots && (conflict.snapshots.localB64 || conflict.snapshots.remoteB64)) {
+      buttons.appendChild(this._btn(t && t.sygspExportCopies || "导出三方副本", () => this._exportCopies(conflict)));
+    }
+    row.appendChild(buttons);
+    return row;
+  }
+  _actionBar(set) {
+    const t = this.i18n;
+    const bar = document.createElement("div");
+    bar.className = "fn__flex";
+    bar.style.gap = "8px";
+    bar.appendChild(this._btn(t && t.sygspKeepAllLocal || "全部保留本地", () => this._decideAll("keep_local"), "b3-button b3-button--text"));
+    bar.appendChild(this._btn(t && t.sygspKeepAllRemote || "全部保留远端", () => this._decideAll("keep_remote"), "b3-button b3-button--text"));
+    const spacer = document.createElement("div");
+    spacer.className = "fn__flex-1";
+    bar.appendChild(spacer);
+    bar.appendChild(this._btn(t && t.gSyncLater || "稍后处理", () => this.close(), "b3-button b3-button--cancel"));
+    return bar;
+  }
+  _btn(label, onClick, cls = "b3-button b3-button--outline") {
+    const btn = document.createElement("button");
+    btn.className = cls;
+    btn.textContent = label;
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+  async _decideOne(path, decision) {
+    await this.conflictService.decide(this.set.operationId, path, decision);
+    this.set.conflicts = this.set.conflicts.filter((c) => c.path !== path);
+    if (this.dialog && this.dialog.element) {
+      const root = this.dialog.element.querySelector("#sygspConflictDialog");
+      this._render(root, this.set);
+    }
+    await this._flushIfAllDecided();
+  }
+  async _decideAll(decision) {
+    for (const conflict of [...this.set.conflicts]) {
+      await this.conflictService.decide(this.set.operationId, conflict.path, decision);
+    }
+    this.set.conflicts = [];
+    this.close();
+    await this._flushIfAllDecided();
+  }
+  async _flushIfAllDecided() {
+    const overrides = this.conflictService.collectOverrides(this.set.operationId);
+    if (overrides.size === 0) return;
+    if (this.dialog) this.close();
     try {
-      if (host.state === SyncState.CONFLICT_PAUSED) {
-        const cd = host.conflictDetail || {};
-        plugin
-          .saveData(DATA_FILE, {
-            state: host.state,
-            conflictDetail: {
-              path: cd.path || "",
-              message: cd.message || "",
-              name: cd.name || "",
-              conflicts: cd.conflicts || [],
-              conflictCount: cd.conflictCount || (cd.conflicts ? cd.conflicts.length : 0),
-            },
-            pausedSince: host.pausedSince,
-            pausedTimer: host.pausedTimer,
-          })
-          .catch(function (err) {
-            // M1: 持久化失败不再静默吞掉,保持内存态暂停并提示
-            addLog("error", "冲突状态持久化失败: " + ((err && err.message) || err));
-            notify(i18n("gSyncPersistFailed", "⚠️ 冲突状态保存失败,重启后可能丢失暂停状态"), "error");
-          });
-      } else {
-        plugin
-          .saveData(DATA_FILE, { state: SyncState.IDLE })
-          .catch(function (err) {
-            // M1: 持久化失败可观测(不静默)
-            addLog("error", "状态持久化失败: " + ((err && err.message) || err));
-            notify(i18n("gSyncPersistFailed", "⚠️ 状态保存失败,重启后可能丢失暂停状态"), "error");
-          });
+      await this.onDecide(overrides);
+    } catch (err) {
+      const msg = err && (err.message || err.toString()) || String(err);
+      this.notify("❌ " + (this.i18n && this.i18n.gSyncResolveFailedMsg || "处理冲突的同步失败,冲突仍待处理") + ": " + msg, "error");
+    }
+  }
+  async _exportCopies(conflict) {
+    try {
+      const dir = "temp/SY-GSP/conflicts/" + this.set.operationId + "/";
+      const stem = conflict.path.replace(/\//g, "_");
+      const writes = [];
+      if (conflict.snapshots && conflict.snapshots.baseB64) {
+        writes.push([dir + stem + ".base", conflict.snapshots.baseB64]);
       }
-    } catch (e) {
-      // 持久化失败不影响主流程(冲突暂停会自动重新建立),但需可观测
-      addLog("error", "持久化异常: " + ((e && e.message) || e));
-    }
-  }
-
-  /** onload 时调用: 恢复上次未解决的冲突暂停状态 + 同步历史 */
-  function onAfterLoad() {
-    try {
-      host.restorePromise = Promise.resolve(plugin.loadData(DATA_FILE));
-    } catch (e) {
-      host.restorePromise = Promise.reject(e);
-    }
-    // M1: 恢复同步历史(失败仅记日志,不影响冲突恢复)
-    try {
-      Promise.resolve(plugin.loadData(HISTORY_FILE))
-        .then(function (data) {
-          if (data && Array.isArray(data.entries)) {
-            host.history = data.entries.slice(0, HISTORY_LIMIT);
-          }
-        })
-        .catch(function (err) {
-          addLog("error", "同步历史恢复失败: " + ((err && err.message) || err));
-        });
-    } catch (e) {
-      addLog("error", "同步历史恢复失败: " + ((e && e.message) || e));
-    }
-    return host.restorePromise
-      .then(function (data) {
-        if (data && data.state === SyncState.CONFLICT_PAUSED) {
-          const raw = data.conflictDetail || {};
-          // 旧版本持久化只有单文件字段,迁移为 conflicts 数组
-          let conflicts = Array.isArray(raw.conflicts) && raw.conflicts.length
-            ? raw.conflicts
-            : raw.path || raw.message
-              ? [{ path: raw.path || "", message: raw.message || "", name: raw.name || "CONFLICT" }]
-              : [];
-          host.conflictDetail = {
-            path: conflicts.length ? conflicts[0].path : "",
-            message: conflicts.length ? conflicts[0].message : "",
-            name: conflicts.length ? conflicts[0].name : "",
-            conflicts: conflicts,
-            conflictCount: conflicts.length,
-          };
-          host.state = SyncState.CONFLICT_PAUSED;
-          host.pausedSince = data.pausedSince || Date.now();
-          // 旧状态文件没有 pausedTimer 时,按自动模式兼容恢复定时器。
-          host.pausedTimer = data.pausedTimer !== false;
-          host.autoSkipNotified = false;
-          setBadge();
-          setIntervalSafe(function () {
-            notify(
-              i18n(
-                "gSyncRestoredPausedMsg",
-                "检测到未解决的同步冲突,自动同步已暂停。请点击插件图标处理冲突"
-              ),
-              "error"
-            );
-          }, 0);
-        }
-        return data;
-      })
-      .catch(function (err) {
-        console.error("git-sync: restore conflict state", err);
-        return null;
-      });
-  }
-
-  /** onLayoutReady 时调用: 根据当前状态刷新顶栏徽标 */
-  function attachBadge() {
-    setBadge();
-  }
-
-  function markAutoTick() {
-    host.autoTick = true;
-  }
-
-  function consumeAutoTick() {
-    const v = host.autoTick;
-    host.autoTick = false;
-    return v;
-  }
-
-  function isPausedConflict() {
-    return host.state === SyncState.CONFLICT_PAUSED;
-  }
-
-  /** 暂停自动同步定时器 */
-  function pauseAutoSync() {
-    try {
-      if (plugin.timerTask) {
-        host.pausedTimer = true;
-        plugin.timerTask.removeSelf();
+      if (conflict.snapshots && conflict.snapshots.localB64) {
+        writes.push([dir + stem + ".local", conflict.snapshots.localB64]);
       }
-    } catch (e) {
-      console.error("git-sync: pauseAutoSync", e);
-    }
-  }
-
-  /** 恢复自动同步定时器(仅自动同步模式下才重启) */
-  function resumeAutoSync() {
-    try {
-      if (!host.pausedTimer) return;
-      const mode = String(plugin.settingUtils.get(SETTING.syncMode));
-      if (mode !== String(SYNC_MODE.AUTO)) {
-        return; // 用户已切到手动模式,不恢复定时器
+      if (conflict.snapshots && conflict.snapshots.remoteB64) {
+        writes.push([dir + stem + ".remote", conflict.snapshots.remoteB64]);
       }
-      host.pausedTimer = false;
-      plugin.startAutoSync(function () {
-        plugin.syncDataToCloud();
-      });
-    } catch (e) {
-      console.error("git-sync: resumeAutoSync", e);
-    }
-  }
-
-  function closeDialog() {
-    try {
-      if (host.dialog) {
-        host.dialog.destroy();
+      for (const [path, b64] of writes) {
+        const bytes = base64ToBytes(b64);
+        await this._putFile(path, bytes);
       }
-    } catch (e) {
-      /* ignore */
+      const t = this.i18n;
+      this.notify((t && t.sygspExportCopiesDone || "已导出到") + " " + dir, "info");
+    } catch (err) {
+      this.notify("❌ " + String(err && err.message || err), "error");
     }
-    host.dialog = null;
   }
+  async _putFile(path, bytes) {
+    if (!this._kernel) {
+      throw new SyncError({ category: SyncErrorCategory.LOCAL_FILE, message: "内核能力未注入" });
+    }
+    await this._kernel.putFile(path, new Blob([bytes]), false);
+  }
+  setKernel(kernel) {
+    this._kernel = kernel;
+  }
+};
+function base64ToBytes(b64) {
+  const clean = String(b64 || "").replace(/\s+/g, "");
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
-  /** 尽力打开冲突文档: 用内核搜索接口按 _conflict_ 前缀找文档,再尝试用 SDK openTab 打开 */
-  function openConflictDoc() {
-    const conflict = host.conflictDetail || {};
-    const baseName = (conflict.path || "").split("/").pop() || "";
-    const key = (baseName.split(".")[0] || "conflict") + "_conflict";
+// src/ui/diagnosis-panel.js
+var DiagnosisPanel = class {
+  /**
+   * @param {object} deps {q, i18n, runChecks: async () => [{name, ok, detail}],
+   *   previewPlan: async () => {uploads, downloads, deletionsRemote, deletionsLocal, conflicts, skippedDeletes},
+   *   onChooseBase: async ("keep_local"|"keep_remote") => void,
+   *   onFirstWriteConfirmed: async () => void,
+   *   notify}
+   */
+  constructor(deps) {
+    this.q = deps.q;
+    this.i18n = deps.i18n;
+    this.runChecks = deps.runChecks;
+    this.previewPlan = deps.previewPlan;
+    this.onChooseBase = deps.onChooseBase;
+    this.onFirstWriteConfirmed = deps.onFirstWriteConfirmed;
+    this.notify = deps.notify;
+    this.dialog = null;
+  }
+  show({ mode = "diagnosis" } = {}) {
+    const q2 = this.q;
+    const t = this.i18n;
+    this.dialog = new q2.Dialog({
+      title: t && t.sygspDiagnosisTitle || "SY-GSP 只读诊断",
+      content: '<div id="sygspDiagnosis" class="fn__flex-column" style="padding:16px;gap:8px;"></div>',
+      width: "640px",
+      height: "70vh",
+      destroyCallback: () => {
+        this.dialog = null;
+      }
+    });
+    const root = this.dialog.element.querySelector("#sygspDiagnosis");
+    this._renderLoading(root);
+    this._run(mode, root);
+  }
+  close() {
+    if (this.dialog) {
+      this.dialog.destroy();
+      this.dialog = null;
+    }
+  }
+  async _run(mode, root) {
+    const checks = await this._safe(this.runChecks);
+    this._render(root, mode, checks);
+  }
+  async _safe(fn) {
     try {
-      if (q && typeof q.fetchSyncPost === "function") {
-        q.fetchSyncPost("/api/search/searchDocs", {
-          k: key,
-          method: 0,
-        })
-          .then(function (resp) {
-            const docs = (resp && resp.data && resp.data.documents) || [];
-            const doc = docs.find(function (d) {
-              return d && d.name && d.name.indexOf("_conflict_") >= 0;
-            });
-            if (doc && doc.id && q && typeof q.openTab === "function") {
-              q.openTab({
-                app: "filetree",
-                id: doc.id,
-                action: "open-doc-by-id",
-                data: { id: doc.id },
-              });
-              closeDialog();
-              return;
-            }
-            notify(
-              i18n(
-                "gSyncOpenDocHint",
-                "未能在搜索中定位冲突文档,请到左侧文件树中找到文件名含 _conflict_ 的文档打开查看"
-              ),
-              "info"
-            );
-          })
-          .catch(function () {
-            notify(
-              i18n(
-                "gSyncOpenDocHint",
-                "未能在搜索中定位冲突文档,请到左侧文件树中找到文件名含 _conflict_ 的文档打开查看"
-              ),
-              "info"
-            );
-          });
+      return await fn() || [];
+    } catch (err) {
+      return [{ name: "诊断执行失败", ok: false, detail: String(err && err.message || err) }];
+    }
+  }
+  _renderLoading(root) {
+    root.textContent = "";
+    const loading = document.createElement("div");
+    loading.className = "fn__loading";
+    loading.innerHTML = '<img width="64px" src="/stage/loading-pure.svg"/>';
+    root.appendChild(loading);
+  }
+  async _render(root, mode, checks) {
+    const t = this.i18n;
+    root.textContent = "";
+    const title = document.createElement("div");
+    title.className = "b3-label";
+    title.textContent = t && t.sygspDiagnosisDesc || "以下检查均为只读操作,不会修改本地或远端数据";
+    root.appendChild(title);
+    for (const check of checks) {
+      const row = document.createElement("div");
+      row.className = "b3-label";
+      const line = document.createElement("div");
+      line.className = "fn__flex";
+      const icon = document.createElement("span");
+      icon.textContent = check.ok ? "✅" : "❌";
+      icon.style.marginRight = "6px";
+      const name = document.createElement("span");
+      name.textContent = check.name;
+      line.appendChild(icon);
+      line.appendChild(name);
+      row.appendChild(line);
+      if (check.detail) {
+        const detail = document.createElement("div");
+        detail.className = "b3-label__text ft__breakword";
+        detail.textContent = check.detail;
+        row.appendChild(detail);
+      }
+      root.appendChild(row);
+    }
+    if (mode === "base_recovery") {
+      root.appendChild(this._baseRecoveryActions());
+    } else if (mode === "first_sync") {
+      root.appendChild(await this._firstSyncPreview());
+    }
+  }
+  _baseRecoveryActions() {
+    const t = this.i18n;
+    const bar = document.createElement("div");
+    bar.className = "fn__flex";
+    bar.style.gap = "8px";
+    const warn = document.createElement("div");
+    warn.className = "b3-label__text fn__flex-1";
+    warn.textContent = t && t.sygspBaseRecoveryWarn || "本地与远端无法证明共同基准。选择一侧为准后执行一次覆盖同步(被覆盖侧的冲突副本会导出备份):";
+    bar.appendChild(warn);
+    bar.appendChild(this._btn(t && t.sygspChooseRemote || "以下载远端为准", () => this._choose("keep_remote")));
+    bar.appendChild(this._btn(t && t.sygspChooseLocal || "以上传本地为准", () => this._choose("keep_local")));
+    bar.appendChild(this._btn(t && t.cancel || "取消", () => this.close(), "b3-button b3-button--cancel"));
+    return bar;
+  }
+  async _firstSyncPreview() {
+    const t = this.i18n;
+    const box = document.createElement("div");
+    box.className = "b3-label fn__flex-column";
+    box.style.gap = "6px";
+    const title = document.createElement("div");
+    title.textContent = t && t.sygspPreviewTitle || "首次写入前的同步计划预览:";
+    box.appendChild(title);
+    const preview = await this._safe(this.previewPlan);
+    for (const item of preview) {
+      const line = document.createElement("div");
+      line.className = "b3-label__text";
+      line.textContent = item.name + ": " + item.detail;
+      box.appendChild(line);
+    }
+    const actions = document.createElement("div");
+    actions.className = "fn__flex";
+    actions.style.gap = "8px";
+    const confirm = this._btn(t && t.sygspConfirmFirstWrite || "确认并开始首次同步", async () => {
+      try {
+        await this.onFirstWriteConfirmed();
+        this.notify(t && t.sygspFirstWriteConfirmed || "✅ 已确认,开始执行首次同步", "info");
+        this.close();
+      } catch (err) {
+        this.notify("❌ " + String(err && err.message || err), "error");
+      }
+    }, "b3-button b3-button--text");
+    actions.appendChild(confirm);
+    actions.appendChild(this._btn(t && t.cancel || "取消", () => this.close(), "b3-button b3-button--cancel"));
+    box.appendChild(actions);
+    return box;
+  }
+  _choose(choice) {
+    this.close();
+    Promise.resolve(this.onChooseBase(choice)).catch((err) => {
+      this.notify("❌ " + String(err && err.message || err), "error");
+    });
+  }
+  _btn(label, onClick, cls = "b3-button b3-button--outline") {
+    const btn = document.createElement("button");
+    btn.className = cls;
+    btn.textContent = label;
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+};
+
+// src/ui/runtime-logs.js
+var RuntimeLogs = class {
+  constructor(limit = 200) {
+    this.limit = limit;
+    this.entries = [];
+  }
+  append(level, text) {
+    this.entries.push({
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      level,
+      text: String(text).slice(0, 1e3)
+    });
+    while (this.entries.length > this.limit) this.entries.shift();
+  }
+  info(text) {
+    this.append("info", text);
+  }
+  error(text) {
+    this.append("error", text);
+  }
+  render() {
+    return this.entries.map((e) => "[" + e.at.replace("T", " ").slice(0, 19) + "] [" + e.level + "] " + e.text).join("\n");
+  }
+};
+function openLogsDialog({ q: q2, i18n, logs }) {
+  const dialog = new q2.Dialog({
+    title: i18n && i18n.gSyncRuntimeLogsTitle || "SY-GSP 运行日志",
+    content: '<div style="padding:12px;display:flex;height:100%;"></div>',
+    width: "720px",
+    height: "60vh"
+  });
+  const root = dialog.element.firstElementChild;
+  const textarea = document.createElement("textarea");
+  textarea.className = "b3-text-field fn__flex-1";
+  textarea.readOnly = true;
+  textarea.style.fontFamily = "monospace";
+  textarea.value = logs.render() || "暂无日志";
+  root.appendChild(textarea);
+}
+
+// src/ui/sync-history-panel.js
+var _SyncHistoryPanel = class _SyncHistoryPanel {
+  constructor(opts) {
+    this._opts = opts;
+    this._i18n = opts.i18n || {};
+    this._provider = opts.provider || {};
+    this._abort = new AbortController();
+    this._destroyed = false;
+    this._commits = [];
+    this._page = 0;
+    this._hasMore = true;
+    this._startRef = "";
+    this._dataSource = "0";
+    this._selectedSha = "";
+    this._loadingCommits = false;
+    this._commitsSeq = 0;
+    this._filesSeq = 0;
+    this._loadingCount = /* @__PURE__ */ new Map();
+    this._loadingOverlays = /* @__PURE__ */ new Map();
+    this._placeholders = /* @__PURE__ */ new WeakMap();
+    this._buildDom();
+    this._bindEvents();
+    this._init();
+  }
+  /** 释放：取消全部事件监听（AbortController signal），移除残留遮罩 */
+  destroy() {
+    this._destroyed = true;
+    if (this._abort) this._abort.abort();
+    for (const o of this._loadingOverlays.values()) o.remove();
+    this._loadingOverlays.clear();
+    this._loadingCount.clear();
+  }
+  // ─────────── 初始化 ───────────
+  async _init() {
+    if (this._destroyed) return;
+    this._setPlaceholder(this._filesEl, this._i18n.selectCommitHint);
+    this._showLoading(this._rootEl);
+    try {
+      await this._fillNotebooks();
+    } catch (err) {
+      this._notifyFail(err, this._i18n.loadFailed);
+    } finally {
+      this._hideLoading(this._rootEl);
+    }
+    await this._reloadCommits();
+  }
+  /** 笔记本下拉：首项 value="" 全部，其余 value=data/<id> */
+  async _fillNotebooks() {
+    const list = await this._opts.listNotebooks();
+    const notebooks = Array.isArray(list) ? list : [];
+    this._notebookSelect.textContent = "";
+    const all = this._option("", this._i18n.allNotebookName);
+    all.title = this._i18n.allNotebooks;
+    this._notebookSelect.appendChild(all);
+    for (const nb of notebooks) {
+      if (!nb || !nb.id) continue;
+      this._notebookSelect.appendChild(this._option("data/" + nb.id, nb.name || nb.id));
+    }
+  }
+  // ─────────── DOM 骨架 ───────────
+  _buildDom() {
+    const i18n = this._i18n;
+    const root = this._el("div", "history__root fn__flex fn__flex-column", "height:100%;min-height:0;box-sizing:border-box");
+    const toolbar = this._el("div", "history__toolbar fn__flex fn__space", "padding:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--b3-theme-background-light)");
+    const sourceSelect = this._el("select", "b3-select history__source");
+    sourceSelect.appendChild(this._option("0", i18n.dataSourceLocal));
+    sourceSelect.appendChild(this._option("1", i18n.dataSourceRemote));
+    const countEl = this._el("span", "history__count ft__on-surface ft__smaller", "", i18n.totalPrefix + " 0 " + i18n.totalSuffix);
+    const localInfo = this._el("span", "history__local ft__on-surface ft__smaller");
+    const sha = this._opts.localCommitSha || "";
+    localInfo.textContent = i18n.localCommitLabel + ": " + (sha ? sha.slice(0, 8) : "-");
+    if (this._opts.localCommitTime) localInfo.title = this._opts.localCommitTime;
+    const notebookSelect = this._el("select", "b3-select history__notebook");
+    const pathInput = this._el("input", "b3-text-field history__path", "width:160px");
+    pathInput.type = "text";
+    pathInput.placeholder = i18n.fileSearchPlaceholder;
+    const sinceLabel = this._el("span", "ft__on-surface ft__smaller", "", i18n.startTime);
+    const sinceInput = this._el("input", "b3-text-field history__since", "width:150px");
+    sinceInput.type = "datetime-local";
+    const untilLabel = this._el("span", "ft__on-surface ft__smaller", "", i18n.endTime);
+    const untilInput = this._el("input", "b3-text-field history__until", "width:150px");
+    untilInput.type = "datetime-local";
+    const searchBtn = this._el("button", "b3-button b3-button--outline history__search", "", i18n.search);
+    searchBtn.type = "button";
+    toolbar.append(
+      sourceSelect,
+      countEl,
+      localInfo,
+      notebookSelect,
+      pathInput,
+      sinceLabel,
+      sinceInput,
+      untilLabel,
+      untilInput,
+      searchBtn
+    );
+    const body = this._el("div", "history__body fn__flex fn__flex-1", "min-height:0");
+    const commitsEl = this._el(
+      "div",
+      "history__commits b3-list b3-list--background",
+      "flex:0 0 320px;width:320px;overflow-y:auto;position:relative;margin:0;border-right:1px solid var(--b3-theme-background-light)"
+    );
+    const right = this._el("div", "history__right fn__flex fn__flex-column", "flex:1;min-width:0;min-height:0");
+    const filesEl = this._el(
+      "div",
+      "history__files b3-list",
+      "flex:0 0 auto;max-height:40%;overflow-y:auto;min-height:0;position:relative;padding:2px 0;margin:0;border-bottom:1px solid var(--b3-theme-background-light)"
+    );
+    const diffEl = this._el("div", "history__diff fn__flex", "flex:1;min-height:0;position:relative");
+    const leftCol = this._buildDiffCol(i18n.commitVersion, true);
+    const rightCol = this._buildDiffCol(i18n.localVersion, false);
+    diffEl.append(leftCol.el, rightCol.el);
+    right.append(filesEl, diffEl);
+    body.append(commitsEl, right);
+    root.append(toolbar, body);
+    [this._rootEl, this._sourceSelect, this._countEl, this._notebookSelect, this._pathInput] = [root, sourceSelect, countEl, notebookSelect, pathInput];
+    [this._sinceInput, this._untilInput, this._searchBtn, this._commitsEl, this._filesEl, this._diffEl] = [sinceInput, untilInput, searchBtn, commitsEl, filesEl, diffEl];
+    [this._leftTitle, this._rightTitle, this._leftTextarea, this._rightTextarea] = [leftCol.title, rightCol.title, leftCol.textarea, rightCol.textarea];
+    this._opts.container.appendChild(root);
+  }
+  /** 创建元素：tag + 可选 class + 可选内联样式 + 可选文本 */
+  _el(tag, cls, css, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (css) e.style.cssText = css;
+    if (text !== void 0) e.textContent = text;
+    return e;
+  }
+  /** 对比列：上方小标题 + 下方只读 textarea */
+  _buildDiffCol(titleText, withBorder) {
+    const col = this._el(
+      "div",
+      "history__col fn__flex fn__flex-column",
+      "flex:1;min-width:0;min-height:0" + (withBorder ? ";border-right:1px solid var(--b3-theme-background-light)" : "")
+    );
+    const title = this._el(
+      "div",
+      "history__col-title",
+      "padding:6px 8px;font-size:12px;color:var(--b3-theme-on-surface);border-bottom:1px solid var(--b3-theme-background-light);white-space:nowrap;overflow:hidden;text-overflow:ellipsis",
+      titleText
+    );
+    const textarea = this._el(
+      "textarea",
+      "history__text fn__flex-1",
+      "width:100%;min-height:0;resize:none;border:none;outline:none;padding:8px;box-sizing:border-box;font-family:var(--b3-font-family-code,monospace);font-size:12px;line-height:1.5;color:var(--b3-theme-on-background);background:transparent"
+    );
+    textarea.readOnly = true;
+    textarea.spellcheck = false;
+    col.append(title, textarea);
+    return { el: col, title, textarea };
+  }
+  // ─────────── 事件绑定 ───────────
+  _bindEvents() {
+    const signal = this._abort.signal;
+    for (const [el, type] of [[this._sourceSelect, "change"], [this._notebookSelect, "change"], [this._searchBtn, "click"]]) {
+      el.addEventListener(type, () => this._reloadCommits(), { signal });
+    }
+    this._pathInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this._reloadCommits();
+    }, { signal });
+    this._commitsEl.addEventListener("click", (e) => {
+      const item = e.target.closest(".history__commit");
+      if (item && item.dataset.sha) this._selectCommit(item.dataset.sha);
+    }, { signal });
+    this._commitsEl.addEventListener("scroll", () => {
+      if (this._commitsEl.scrollTop + this._commitsEl.clientHeight >= this._commitsEl.scrollHeight - 24) this._loadCommitsPage();
+    }, { signal });
+    this._filesEl.addEventListener("click", (e) => {
+      const nameEl = e.target.closest(".history__filename");
+      if (nameEl && nameEl.dataset.path) {
+        this._loadDiff(nameEl.dataset.path);
         return;
       }
-    } catch (e) {
-      /* fallthrough */
-    }
-    notify(
-      i18n(
-        "gSyncOpenDocHint",
-        "冲突文档已生成在原文档旁(文件名含 _conflict_ 前缀),请在左侧文件树中打开查看"
-      ),
-      "info"
-    );
+      const rb = e.target.closest(".history__btn--rollback");
+      if (rb && rb.dataset.path) {
+        this._runFileAction("rollback", rb.dataset.path);
+        return;
+      }
+      const dl = e.target.closest(".history__btn--download");
+      if (dl && dl.dataset.path) {
+        this._runFileAction("download", dl.dataset.path);
+        return;
+      }
+    }, { signal });
   }
-
-  /** 弹出冲突处理对话框(持久,直到用户选择) */
-  function showConflictDialog() {
-    const conflict = host.conflictDetail || {};
-    const conflicts = Array.isArray(conflict.conflicts) ? conflict.conflicts : [];
-    const pathText = conflicts.length ? conflicts[0].path || "" : conflict.path || "";
-    // M1: 多冲突时展示数量与文件列表(最多列出前 10 个)
-    let listHtml = "";
-    if (conflicts.length > 1) {
-      const shown = conflicts.slice(0, 10);
-      listHtml =
-        '<div style="max-height:140px;overflow:auto;border-top:1px solid var(--b3-theme-background-light);margin-top:8px;padding-top:6px">' +
-        shown
-          .map(function (c) {
-            return '<div style="word-break:break-all;font-size:12px;padding:2px 0">• ' + escapeHtml(c.path || "") + "</div>";
-          })
-          .join("") +
-        (conflicts.length > 10 ? '<div style="font-size:12px;opacity:.6">…等 ' + conflicts.length + " 个文件</div>" : "") +
-        "</div>";
+  // ─────────── 提交列表 ───────────
+  /** 按当前筛选条件重置列表并从第一页重新加载 */
+  async _reloadCommits() {
+    if (this._destroyed) return;
+    this._commitsSeq += 1;
+    this._filesSeq += 1;
+    if (this._dataSource === "0" && !this._opts.localCommitSha) {
+      this._dataSource = "1";
+      this._sourceSelect.value = "1";
+      this._opts.notify(this._i18n.noLocalCommit, "info");
     }
+    this._startRef = this._dataSource === "0" ? this._opts.localCommitSha : this._opts.branchName;
+    this._commits = [];
+    this._page = 0;
+    this._hasMore = Boolean(this._startRef);
+    this._selectedSha = "";
+    this._commitsEl.scrollTop = 0;
+    this._countEl.textContent = this._i18n.totalPrefix + " 0 " + this._i18n.totalSuffix;
+    this._removePlaceholder(this._commitsEl);
+    this._commitsEl.textContent = "";
+    this._clearDiff();
+    this._renderFiles(null, this._i18n.selectCommitHint);
+    if (!this._startRef) {
+      this._setPlaceholder(this._commitsEl, this._i18n.emptyCommits);
+      return;
+    }
+    await this._loadCommitsPage();
+  }
+  /** 加载下一页并追加；返回条数不足 perPage 时停止翻页 */
+  async _loadCommitsPage() {
+    if (this._destroyed || this._loadingCommits || !this._hasMore) return;
+    const seq = this._commitsSeq;
+    this._loadingCommits = true;
+    const el = this._commitsEl;
+    this._showLoading(el);
     try {
-      closeDialog();
-      const dialogInstance = new q.Dialog({
-        title:
-          i18n("gSyncConflictTitle", "⚠️ 检测到同步冲突") +
-          (conflicts.length > 1 ? "(" + conflicts.length + " 个文件)" : ""),
-        content:
-          '<div class="b3-dialog__content">' +
-          '<div class="b3-label__text" style="margin-bottom:8px">' +
-          i18n(
-            "gSyncConflictDesc",
-            "本地与远端的数据同时被修改,自动同步已暂停。请选择处理方式:"
-          ) +
-          "</div>" +
-          '<div class="b3-label" style="margin-bottom:12px">' +
-          '<span class="b3-label__text">' +
-          i18n("gSyncConflictFile", "冲突文件") +
-          ":</span> " +
-          '<code style="word-break:break-all">' +
-          escapeHtml(pathText) +
-          "</code>" +
-          listHtml +
-          "</div>" +
-          '<div class="fn__flex" style="gap:8px;flex-wrap:wrap">' +
-          '<button class="b3-button b3-button--text" id="gSyncKeepLocal" style="flex:1;min-width:40%">' +
-          i18n("gSyncKeepLocal", "保留本地版本") +
-          "</button>" +
-          '<button class="b3-button b3-button--text" id="gSyncKeepRemote" style="flex:1;min-width:40%">' +
-          i18n("gSyncKeepRemote", "保留远端版本") +
-          "</button>" +
-          '<button class="b3-button b3-button--text" id="gSyncOpenDoc" style="flex:1;min-width:40%">' +
-          i18n("gSyncOpenConflictDoc", "打开冲突文档") +
-          "</button>" +
-          '<button class="b3-button b3-button--cancel" id="gSyncLater" style="flex:1;min-width:40%">' +
-          i18n("gSyncLater", "稍后处理") +
-          "</button>" +
-          "</div>" +
-          "</div>",
-        width: "560px",
-        hideCloseIcon: false,
-        destroyCallback: function () {
-          host.dialog = null;
-        },
-      });
-      host.dialog = dialogInstance;
-      const root = dialogInstance.element;
-      const bind = function (id, fn) {
-        try {
-          const btn = root && root.querySelector("#" + id);
-          if (btn) btn.addEventListener("click", fn);
-        } catch (e) {
-          /* ignore */
-        }
-      };
-      bind("gSyncKeepLocal", function () {
-        resolveKeepLocal();
-      });
-      bind("gSyncKeepRemote", function () {
-        resolveKeepRemote();
-      });
-      bind("gSyncOpenDoc", function () {
-        openConflictDoc();
-      });
-      bind("gSyncLater", function () {
-        closeDialog();
-        notify(
-          i18n(
-            "gSyncLaterMsg",
-            "冲突仍待处理:自动同步保持暂停,恢复后请及时处理"
-          ),
-          "info"
-        );
-      });
-    } catch (e) {
-      console.error("git-sync: showConflictDialog", e);
-    }
-  }
-
-  function reopenConflictDialog() {
-    notify(
-      i18n("gSyncPausedMsg", "⚠️ 同步冲突未解决,自动同步已暂停,请先处理冲突"),
-      "error"
-    );
-    if (!host.dialog) {
-      showConflictDialog();
-    }
-  }
-
-  /** 用户选择: 保留本地版本 → 强制「本地覆盖远端」 */
-  function resolveKeepLocal() {
-    closeDialog();
-    return plugin.syncDataToCloud(STRATEGY.LOCAL_OVER_REMOTE, true);
-  }
-
-  /** 用户选择: 保留远端版本 → 强制「远端覆盖本地」 */
-  function resolveKeepRemote() {
-    closeDialog();
-    return plugin.syncDataToCloud(STRATEGY.REMOTE_OVER_LOCAL, true);
-  }
-
-  /** 冲突处理: 置冲突状态 → 暂停自动同步 → 通知 → 弹窗 */
-  function handleConflict(err) {
-    const info = extractConflictInfo(err);
-    host.state = SyncState.CONFLICT;
-    host.conflictDetail = info;
-    host.pausedSince = Date.now();
-    host.pausedTimer = false;
-    pauseAutoSync();
-    host.state = SyncState.CONFLICT_PAUSED;
-    host.autoSkipNotified = false;
-    setBadge();
-    persist();
-    // M1: 冲突事件 + 历史记录 + 数量通知
-    emitSync("sync:conflict", { conflictDetail: info, conflictCount: info.conflictCount });
-    addHistoryEntry({
-      state: SyncState.CONFLICT_PAUSED,
-      category: "CONFLICT",
-      message: info.message || i18n("gSyncConflictMsg", "检测到同步冲突"),
-      fileCount: info.conflictCount,
-    });
-    notify(
-      i18n("gSyncConflictMsg", "🔴 检测到同步冲突,自动同步已暂停") +
-        (info.conflictCount > 1 ? "(" + info.conflictCount + " 个文件)" : ""),
-      "error"
-    );
-    showConflictDialog();
-    return undefined;
-  }
-
-  /**
-   * 同步入口包装(替换原 syncDataToCloud):
-   *  - 冲突暂停状态下: 拦截自动同步/普通手动触发,放行用户的明确解决动作
-   *  - 正常: 原逻辑 + 同步状态机 + 冲突接管
-   *  - M1: 开始/成功/失败即时通知 + 事件总线 + 同步历史
-   */
-  async function runSync(t, s) {
-    const prevState = host.state;
-    // 每轮同步开始重置文件操作统计(patch 注入的 trackFile 会重新填充)
-    host.syncStats = { create: [], update: [], delete: [] };
-    // 用户的「明确解决动作」: 强制 远端覆盖本地 / 本地覆盖远端
-    const isResolution =
-      t === STRATEGY.REMOTE_OVER_LOCAL || t === STRATEGY.LOCAL_OVER_REMOTE;
-
-    if (isPausedConflict()) {
-      if (isResolution) {
-        // 用户明确选择了解决方向 → 放行,进入解决流程
-        host.wasConflictFlow = true;
-        host.state = SyncState.RESOLVING;
-        setBadge();
-        host.currentOperationId = nextOperationId();
-        emitSync("sync:start", { operationId: host.currentOperationId, phase: "resolve" });
-      } else {
-        const autoTick = consumeAutoTick();
-        if (!autoTick) {
-          // 用户手动点击开始同步 / 选择方向: 重新弹窗引导先处理冲突
-          reopenConflictDialog();
-        } else if (!host.autoSkipNotified) {
-          // 自动同步定时器: 静默跳过,一个暂停会话只提示一次
-          host.autoSkipNotified = true;
-          notify(
-            i18n(
-              "gSyncPausedMsg",
-              "⚠️ 同步冲突未解决,自动同步已暂停,请处理冲突"
-            ),
-            "error"
-          );
-        }
-        return undefined;
-      }
-    } else {
-      // M1: 非暂停路径读取并消费 autoTick 标记(定时触发只记日志不 toast,避免轰炸)
-      const wasAutoTick = host.autoTick;
-      host.autoTick = false;
-      host.state = SyncState.RUNNING;
-      setBadge();
-      host.currentOperationId = nextOperationId();
-      const startMsg = i18n("gSyncStartMsg", "🔄 开始同步...");
-      addLog("info", startMsg);
-      emitSync("sync:start", { operationId: host.currentOperationId });
-      if (!wasAutoTick) {
-        notify(startMsg, "info");
-      }
-    }
-
-    try {
-      const result = await plugin.__gSyncDataToCloudBase(t, s);
-
-      if (host.wasConflictFlow) {
-        // 冲突解决流程完成
-        host.wasConflictFlow = false;
-        host.conflictDetail = null;
-        host.pausedSince = 0;
-        host.autoSkipNotified = false;
-        host.state = SyncState.RESOLVED;
-        setBadge();
-        persist();
-        resumeAutoSync();
-        addHistoryEntry({
-          state: SyncState.RESOLVED,
-          category: "",
-          message: i18n("gSyncResolvedMsg", "✅ 冲突已处理,自动同步已恢复"),
-        });
-        emitSync("sync:success", { operationId: host.currentOperationId });
-        emitSync("sync:resumed", { operationId: host.currentOperationId });
-        notify(
-          i18n("gSyncResolvedMsg", "✅ 冲突已处理,自动同步已恢复"),
-          "info"
-        );
-        return result;
-      }
-
-      host.state = SyncState.SUCCESS;
-      setBadge();
-      const stats = host.syncStats || { create: [], update: [], delete: [] };
-      const created = stats.create.length;
-      const updated = stats.update.length;
-      const deleted = stats.delete.length;
-      const total = created + updated + deleted;
-      let successMsg = i18n("gSyncSuccessMsg", "✅ 同步成功");
-      if (total > 0) {
-        // 有文件变更: 成功消息带数量摘要,明细单独写入运行日志
-        successMsg =
-          successMsg +
-          "(" +
-          i18n("gSyncCreatedLabel", "新增") +
-          " " +
-          created +
-          ", " +
-          i18n("gSyncUpdatedLabel", "更新") +
-          " " +
-          updated +
-          ", " +
-          i18n("gSyncDeletedLabel", "删除") +
-          " " +
-          deleted +
-          ")";
-        addLog("info", successMsg);
-        const statsDetail = buildFileStatsText();
-        if (statsDetail) {
-          addLog("info", statsDetail);
-        }
-      } else {
-        // 无文件变更: 明确提示已停止同步,避免用户误以为没有执行
-        successMsg =
-          successMsg +
-          "(" +
-          i18n("gSyncNoChangeMsg", "未检测到文件变更,已停止同步") +
-          ")";
-        addLog("info", successMsg);
-      }
-      addHistoryEntry({
-        state: SyncState.SUCCESS,
-        category: "",
-        message: successMsg,
-      });
-      emitSync("sync:success", {
-        operationId: host.currentOperationId,
-        fileStats: { created: created, updated: updated, deleted: deleted },
-      });
-      if (isSyncNotifyEnabled()) {
-        notify(successMsg, "info");
-      }
-      return result;
+      const query = { sha: this._startRef, perPage: _SyncHistoryPanel.PER_PAGE, page: this._page };
+      const path = this._queryPath();
+      if (path) query.path = path;
+      const since = this._sinceInput.value ? new Date(this._sinceInput.value).toISOString() : "";
+      if (since) query.since = since;
+      const until = this._untilInput.value ? new Date(this._untilInput.value).toISOString() : "";
+      if (until) query.until = until;
+      const list = await this._provider.listCommits(query);
+      if (this._destroyed || seq !== this._commitsSeq) return;
+      const items = Array.isArray(list) ? list : [];
+      this._appendCommits(items);
+      this._hasMore = items.length >= _SyncHistoryPanel.PER_PAGE;
+      this._page += 1;
     } catch (err) {
-      if (isConflictError(err)) {
-        return handleConflict(err);
-      }
-      // 「正在同步中」的保护错误视为良性,不改变状态
-      const benign =
-        err &&
-        plugin &&
-        plugin.i18n &&
-        typeof err.message === "string" &&
-        err.message === plugin.i18n.isSyncingInfo;
-      const classified = classifyError(err);
-      const label = CATEGORY_LABEL[classified.category] || CATEGORY_LABEL.UNKNOWN;
-      if (host.wasConflictFlow) {
-        // 解决冲突的同步失败 → 回到暂停态,等待用户重试
-        host.wasConflictFlow = false;
-        host.state = SyncState.CONFLICT_PAUSED;
-        setBadge();
-        addHistoryEntry({
-          state: SyncState.CONFLICT_PAUSED,
-          category: classified.category,
-          message: formatErrorSummary(err),
-        });
-        emitSync("sync:error", {
-          operationId: host.currentOperationId,
-          category: classified.category,
-          retryable: classified.retryable,
-          recoverable: classified.recoverable,
-          message: formatErrorSummary(err),
-        });
-        notify(
-          i18n(
-            "gSyncResolveFailedMsg",
-            "❌ 处理冲突的同步失败,冲突仍待处理"
-          ) + "(" + label + ")",
-          "error"
-        );
-        showConflictDialog();
-      } else if (!benign) {
-        host.state = SyncState.FAILED;
-        setBadge();
-        const message = formatErrorSummary(err);
-        addLog("error", "同步失败: " + message + " [" + classified.category + "]");
-        addHistoryEntry({
-          state: SyncState.FAILED,
-          category: classified.category,
-          message: message,
-        });
-        emitSync("sync:error", {
-          operationId: host.currentOperationId,
-          category: classified.category,
-          retryable: classified.retryable,
-          recoverable: classified.recoverable,
-          message: message,
-        });
-        notify("❌ 同步失败: " + message + "(" + label + ")", "error");
-      } else {
-        // 「正在同步中」的良性保护错误: 恢复进入前的状态
-        host.state = prevState;
-      }
-      throw err; // 非冲突错误保持原行为(由原异常处理器 toast / 记日志)
+      if (this._destroyed || seq !== this._commitsSeq) return;
+      this._hasMore = false;
+      this._notifyFail(err, this._i18n.loadFailed);
+    } finally {
+      this._loadingCommits = false;
+      if (!this._destroyed) this._hideLoading(el);
     }
   }
-
-  // 挂载公开方法到宿主
-  host.i18n = i18n;
-  host.notify = notify;
-  host.addLog = addLog;
-  host.trackFile = trackFile;
-  host.buildFileStatsText = buildFileStatsText;
-  host.showRuntimeLogs = showRuntimeLogs;
-  host.setBadge = setBadge;
-  host.persist = persist;
-  host.onAfterLoad = onAfterLoad;
-  host.attachBadge = attachBadge;
-  host.markAutoTick = markAutoTick;
-  host.consumeAutoTick = consumeAutoTick;
-  host.isPausedConflict = isPausedConflict;
-  host.pauseAutoSync = pauseAutoSync;
-  host.resumeAutoSync = resumeAutoSync;
-  host.closeDialog = closeDialog;
-  host.openConflictDoc = openConflictDoc;
-  host.showConflictDialog = showConflictDialog;
-  host.reopenConflictDialog = reopenConflictDialog;
-  host.resolveKeepLocal = resolveKeepLocal;
-  host.resolveKeepRemote = resolveKeepRemote;
-  host.handleConflict = handleConflict;
-  host.runSync = runSync;
-  // M1: 事件总线 / 历史 / 通知开关
-  host.events = host.events || createEventBus();
-  host.emitSync = emitSync;
-  host.addHistoryEntry = addHistoryEntry;
-  host.isSyncNotifyEnabled = isSyncNotifyEnabled;
-  host.classifyError = classifyError;
-  host.getErrorSummary = getErrorSummary;
-
-  // 把宿主句柄挂到插件实例上(便于调试/测试访问,不影响插件行为)
-  try {
-    plugin.__gSyncFlowHost = host;
-  } catch (e) {
-    /* ignore */
+  /** 去重追加提交（含 DOM 渲染与计数更新） */
+  _appendCommits(list) {
+    const seen = new Set(this._commits.map((c) => c.sha));
+    const frag = document.createDocumentFragment();
+    for (const c of list) {
+      if (!c || !c.sha || seen.has(c.sha)) continue;
+      seen.add(c.sha);
+      this._commits.push(c);
+      frag.appendChild(this._createCommitItem(c));
+    }
+    this._countEl.textContent = this._i18n.totalPrefix + " " + this._commits.length + " " + this._i18n.totalSuffix;
+    if (this._commits.length === 0) {
+      this._setPlaceholder(this._commitsEl, this._i18n.emptyCommits);
+      return;
+    }
+    this._removePlaceholder(this._commitsEl);
+    this._commitsEl.appendChild(frag);
   }
-
-  return host;
-}
-
-/** 兜底: 某些宿主环境没有全局 setInterval 安全包装时使用 */
-function setIntervalSafe(fn, ms) {
-  try {
-    return setTimeout(fn, ms);
-  } catch (e) {
+  /** 列表项：第一行提交信息首行，第二行小字灰色=作者+本地时间 */
+  _createCommitItem(commit) {
+    const item = this._el("div", "b3-list-item history__commit", "cursor:pointer;display:flex;align-items:center");
+    item.dataset.sha = commit.sha;
+    item.title = commit.message || commit.sha;
+    const wrap = this._el("div", "fn__flex fn__flex-column fn__flex-1", "min-width:0");
+    const title = this._el(
+      "div",
+      "history__commit-title",
+      "overflow:hidden;text-overflow:ellipsis;white-space:nowrap",
+      (commit.message || "").split("\n")[0] || commit.sha
+    );
+    const date = commit.date ? new Date(commit.date) : null;
+    const time = date && !isNaN(date.getTime()) ? date.toLocaleString() : "";
+    const meta = this._el(
+      "div",
+      "history__commit-meta ft__on-surface ft__smaller",
+      "overflow:hidden;text-overflow:ellipsis;white-space:nowrap",
+      [commit.author, time].filter(Boolean).join(" · ")
+    );
+    wrap.append(title, meta);
+    item.appendChild(wrap);
+    if (commit.sha === this._selectedSha) this._setHighlight(item, true);
+    return item;
+  }
+  /** 选中提交：高亮 + 加载文件列表 + 清空对比区 */
+  _selectCommit(sha) {
+    if (!sha || sha === this._selectedSha) return;
+    this._selectedSha = sha;
+    for (const item of this._commitsEl.querySelectorAll(".history__commit")) {
+      this._setHighlight(item, item.dataset.sha === sha);
+    }
+    const commit = this._commits.find((c) => c.sha === sha);
+    this._clearDiff();
+    if (commit) this._loadFiles(commit);
+  }
+  /** 高亮切换（内联背景兜底：宿主未定义该 class 时也有选中反馈） */
+  _setHighlight(item, on) {
+    item.classList.toggle("b3-list-item--focus", on);
+    item.style.backgroundColor = on ? "var(--b3-theme-primary-light)" : "";
+  }
+  // ─────────── 文件列表 ───────────
+  /** 加载选中提交的变更文件（基准=本机上次提交，无则退化为其父提交） */
+  async _loadFiles(commit) {
+    if (this._destroyed) return;
+    const seq = ++this._filesSeq;
+    const el = this._filesEl;
+    this._showLoading(el);
     try {
-      fn();
-    } catch (e2) {
-      /* ignore */
+      const base = this._opts.localCommitSha || (commit.parents && commit.parents[0] || "");
+      const files = await this._provider.compareCommits(base, commit.sha);
+      if (this._destroyed || seq !== this._filesSeq) return;
+      this._renderFiles(Array.isArray(files) ? files : []);
+    } catch (err) {
+      if (this._destroyed || seq !== this._filesSeq) return;
+      this._renderFiles(null, this._i18n.loadFailed);
+      this._notifyFail(err, this._i18n.loadFailed);
+    } finally {
+      if (!this._destroyed) this._hideLoading(el);
     }
-    return 0;
+  }
+  /** 渲染文件行；files 为空/null 时显示占位提示 */
+  _renderFiles(files, hint) {
+    this._filesEl.textContent = "";
+    this._removePlaceholder(this._filesEl);
+    if (!files || !files.length) {
+      this._setPlaceholder(this._filesEl, hint || this._i18n.emptyFiles);
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const f of files) frag.appendChild(this._createFileRow(f));
+    this._filesEl.appendChild(frag);
+  }
+  /** 文件行：状态徽标 + 可点击文件名 + 行尾操作按钮（removed 无按钮） */
+  _createFileRow(file) {
+    const i18n = this._i18n;
+    const row = this._el("div", "b3-list-item history__file", "display:flex;align-items:center;gap:6px;padding:4px 8px");
+    const status = _SyncHistoryPanel.STATUS_MAP[file.status] || { key: null, cls: "ft__primary" };
+    const badge = this._el(
+      "span",
+      "history__status " + status.cls,
+      "min-width:3em",
+      status.key ? i18n[status.key] : file.status
+    );
+    const name = this._el(
+      "span",
+      "history__filename fn__flex-1",
+      "cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap",
+      file.filename
+    );
+    name.dataset.path = file.filename;
+    row.append(badge, name);
+    if (file.status !== "removed") {
+      row.append(
+        this._createActionBtn("history__btn--rollback", i18n.rollbackFile, "⤴︎", file.filename),
+        this._createActionBtn("history__btn--download", i18n.downloadFile, "↓", file.filename)
+      );
+    }
+    return row;
+  }
+  _createActionBtn(cls, title, label, path) {
+    const btn = this._el(
+      "button",
+      "b3-button b3-button--outline history__btn " + cls,
+      "padding:1px 6px;height:22px;min-width:22px;line-height:20px;font-size:14px;flex:0 0 auto",
+      label
+    );
+    btn.type = "button";
+    btn.dataset.path = path;
+    btn.title = title;
+    return btn;
+  }
+  // ─────────── 内容对比 ───────────
+  /** 点击文件名：左侧提交版本内容，右侧本地当前内容（失败显示空并轻提示） */
+  async _loadDiff(path) {
+    if (this._destroyed || !path || !this._selectedSha) return;
+    const seq = ++this._filesSeq;
+    const i18n = this._i18n;
+    const el = this._diffEl;
+    this._showLoading(el);
+    this._leftTextarea.value = "";
+    this._rightTextarea.value = "";
+    this._leftTitle.textContent = i18n.commitVersion + " " + this._selectedSha.slice(0, 8);
+    this._rightTitle.textContent = i18n.localVersion;
+    try {
+      const [left, right] = await Promise.allSettled([
+        this._provider.getFileContent(path, this._selectedSha),
+        this._provider.getFileContent(path, this._opts.branchName)
+      ]);
+      if (this._destroyed || seq !== this._filesSeq) return;
+      if (left.status === "fulfilled" && left.value && typeof left.value.text === "string") this._leftTextarea.value = left.value.text;
+      else if (left.status === "rejected") this._notifyFail(left.reason, i18n.fileLoadFailed);
+      if (right.status === "fulfilled" && right.value && typeof right.value.text === "string") this._rightTextarea.value = right.value.text;
+      else if (right.status === "rejected") {
+        this._rightTextarea.value = "";
+        this._notifyFail(right.reason, i18n.fileLoadFailed);
+      }
+    } finally {
+      if (!this._destroyed) this._hideLoading(el);
+    }
+  }
+  /** 清空对比区并复位标题 */
+  _clearDiff() {
+    this._leftTextarea.value = "";
+    this._rightTextarea.value = "";
+    this._leftTitle.textContent = this._i18n.commitVersion;
+    this._rightTitle.textContent = this._i18n.localVersion;
+  }
+  // ─────────── 回滚 / 下载 ───────────
+  /** 通用文件动作：遮罩 + 调用回调 + 结果轻提示 */
+  async _runFileAction(kind, path) {
+    if (this._destroyed) return;
+    const i18n = this._i18n;
+    const done = kind === "rollback" ? i18n.rollbackDone : i18n.downloadDone;
+    const fail = kind === "rollback" ? i18n.rollbackFailed : i18n.downloadFailed;
+    const fn = kind === "rollback" ? this._opts.onRollback : this._opts.onDownload;
+    const el = this._filesEl;
+    this._showLoading(el);
+    try {
+      await fn(path, this._selectedSha);
+      if (!this._destroyed) this._opts.notify(done, "success");
+    } catch (err) {
+      if (!this._destroyed) this._notifyFail(err, fail);
+    } finally {
+      if (!this._destroyed) this._hideLoading(el);
+    }
+  }
+  // ─────────── 查询参数 ───────────
+  /** path 筛选：笔记本前缀与文件路径输入合并；输入以 data/ 开头视为完整路径直接使用 */
+  _queryPath() {
+    const nb = this._notebookSelect.value;
+    const input = this._pathInput.value.trim().replace(/^\/+/, "");
+    if (input.startsWith("data/")) return input;
+    if (nb && input) return nb + "/" + input;
+    return nb || input;
+  }
+  // ─────────── 工具方法 ───────────
+  _option(value, text) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    return o;
+  }
+  /** 失败轻提示：优先原始错误信息，缺失时用兜底文案 */
+  _notifyFail(err, fallback) {
+    let msg = "";
+    if (err) msg = err.message || String(err);
+    this._opts.notify(msg || fallback, "error");
+  }
+  /** 容器上叠加绝对定位居中 loading 遮罩（按容器计数，支持并发请求） */
+  _showLoading(el) {
+    if (!el || this._destroyed) return;
+    const count = this._loadingCount.get(el) || 0;
+    if (count === 0) {
+      const overlay = this._el(
+        "div",
+        "fn__loading",
+        "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background-color:var(--b3-theme-background);opacity:0.85"
+      );
+      const img = this._el("img");
+      img.width = 64;
+      img.src = "/stage/loading-pure.svg";
+      img.alt = this._i18n.loadingText;
+      overlay.appendChild(img);
+      el.appendChild(overlay);
+      el.style.position = "relative";
+      this._loadingOverlays.set(el, overlay);
+    }
+    this._loadingCount.set(el, count + 1);
+  }
+  _hideLoading(el) {
+    if (!el) return;
+    const count = (this._loadingCount.get(el) || 0) - 1;
+    if (count > 0) {
+      this._loadingCount.set(el, count);
+      return;
+    }
+    this._loadingCount.delete(el);
+    const overlay = this._loadingOverlays.get(el);
+    if (overlay) {
+      overlay.remove();
+      this._loadingOverlays.delete(el);
+    }
+  }
+  /** 设置空态占位（自动替换已有占位） */
+  _setPlaceholder(el, text) {
+    this._removePlaceholder(el);
+    const p = this._el("div", "history__placeholder", "padding:16px;text-align:center;font-size:13px;color:var(--b3-theme-on-surface)", text);
+    el.appendChild(p);
+    this._placeholders.set(el, p);
+  }
+  _removePlaceholder(el) {
+    const p = this._placeholders.get(el);
+    if (p) {
+      p.remove();
+      this._placeholders.delete(el);
+    }
+  }
+};
+__publicField(_SyncHistoryPanel, "PER_PAGE", 50);
+// 变更状态 → i18n 键与配色（新增/修改/删除/重命名）
+__publicField(_SyncHistoryPanel, "STATUS_MAP", {
+  added: { key: "statusAdded", cls: "ft__success" },
+  modified: { key: "statusModified", cls: "ft__primary" },
+  removed: { key: "statusRemoved", cls: "ft__error" },
+  renamed: { key: "statusRenamed", cls: "ft__warning" }
+});
+var SyncHistoryPanel = _SyncHistoryPanel;
+
+// src/plugin/menu.js
+function buildTopBarMenu({ q: q2, plugin, i18n, actions, conflictPaused }) {
+  const t = i18n;
+  const menu = new q2.Menu("SY-GSP", true);
+  if (conflictPaused) {
+    menu.addItem({
+      iconHTML: "",
+      label: t.sygspMenuResolveConflict || "🔴 处理冲突/恢复同步",
+      click: actions.resolveConflict
+    });
+    menu.addSeparator();
+  }
+  menu.addItem({
+    iconHTML: "",
+    label: t.startSync,
+    icon: "iconRefresh",
+    click: actions.startSync
+  });
+  const refresh = menu.addItem({
+    iconHTML: "",
+    label: t.refreshOrRecover,
+    icon: "iconRefresh",
+    type: "submenu"
+  });
+  refresh.addItem({
+    iconHTML: "",
+    label: t.refreshWSTree,
+    icon: "iconRefresh",
+    click: actions.refreshWorkspaceTree
+  });
+  refresh.addItem({
+    iconHTML: "",
+    label: t.recoverAssets,
+    icon: "iconImage",
+    click: actions.recoverAssets
+  });
+  const range = menu.addItem({
+    iconHTML: "",
+    label: t.syncRange,
+    icon: "iconFilter",
+    type: "submenu"
+  });
+  addRadioItems(range, t.syncRange, [
+    ["0", t.workSpace],
+    ["1", t.dataFile],
+    ["2", t.noteFile]
+  ], "sync_range", actions);
+  const strategy = menu.addItem({
+    iconHTML: "",
+    label: t.syncStrategy,
+    icon: "iconSettings",
+    type: "submenu"
+  });
+  addRadioItems(strategy, t.syncStrategy, [
+    ["0", t.autoSyncStrategy],
+    ["1", t.selectUpload],
+    ["2", t.keepRemoteCover],
+    ["3", t.keepLocalCover]
+  ], "sync_strategy", actions);
+  const fileType = menu.addItem({
+    iconHTML: "",
+    label: t.noteType,
+    icon: "iconFile",
+    type: "submenu"
+  });
+  addRadioItems(fileType, t.noteType, [
+    ["0", t.siyuanFile],
+    ["1", t.markdownFile]
+  ], "sync_file_type", actions);
+  const mode = menu.addItem({
+    iconHTML: "",
+    label: t.syncMode,
+    icon: "iconClock",
+    type: "submenu"
+  });
+  addRadioItems(mode, t.syncMode, [
+    ["0", t.autoSync],
+    ["1", t.manualSync],
+    ["2", t.fullManualSync]
+  ], "sync_mode", actions);
+  menu.addSeparator();
+  menu.addItem({
+    iconHTML: "",
+    label: t.syncHistory,
+    icon: "iconHistory",
+    click: actions.openHistory
+  });
+  menu.addItem({
+    iconHTML: "",
+    label: t.sygspMenuLogs || "运行日志",
+    icon: "iconInfo",
+    click: actions.openLogs
+  });
+  menu.addItem({
+    iconHTML: "",
+    label: t.sygspMenuDiagnosis || "只读诊断",
+    icon: "iconHeart",
+    click: actions.openDiagnosis
+  });
+  menu.addSeparator();
+  menu.addItem({
+    iconHTML: "",
+    label: t.setting,
+    icon: "iconSettings",
+    click: actions.openSettings
+  });
+  return menu;
+}
+function addRadioItems(parent, title, options, settingKey, actions) {
+  const current = String(parent ? actions.getSetting(settingKey) : "");
+  for (const [value, label] of options) {
+    parent.addItem({
+      iconHTML: current === value ? "iconSelect" : "",
+      label,
+      click: async () => {
+        await actions.setSettingAndSave(settingKey, Number(value));
+      }
+    });
   }
 }
-return {SyncState:SyncState,createSyncFlowHost:createSyncFlowHost,isConflictError:isConflictError};
-})();
-var __gSyncFlow=null;
-function __gEnsureSyncFlow(self){if(!__gSyncFlow){__gSyncFlow=__gSyncHostFactory.createSyncFlowHost(self,q);}return __gSyncFlow;}
-// <<< END GIT-SYNC conflict-flow runtime >>>
-function bt(){}function wo(r){return r()}function Sn(){return Object.create(null)}function Ut(r){r.forEach(wo)}function Ki(r){return typeof r=="function"}function ps(r,e){return r!=r?e==e:r!==e||r&&typeof r=="object"||typeof r=="function"}function pa(r){return Object.keys(r).length===0}function b(r,e){r.appendChild(e)}function ee(r,e,t){r.insertBefore(e,t||null)}function J(r){r.parentNode&&r.parentNode.removeChild(r)}function bo(r,e){for(let t=0;t<r.length;t+=1)r[t]&&r[t].d(e)}function D(r){return document.createElement(r)}function nr(r){return document.createElementNS("http://www.w3.org/2000/svg",r)}function Oe(r){return document.createTextNode(r)}function M(){return Oe(" ")}function _o(){return Oe("")}function Ae(r,e,t,s){return r.addEventListener(e,t,s),()=>r.removeEventListener(e,t,s)}function T(r,e,t){t==null?r.removeAttribute(e):r.getAttribute(e)!==t&&r.setAttribute(e,t)}function Hs(r,e,t){r.setAttributeNS("http://www.w3.org/1999/xlink",e,t)}function da(r){let e;return{p(...t){e=t,e.forEach(s=>r.push(s))},r(){e.forEach(t=>r.splice(r.indexOf(t),1))}}}function ma(r){return Array.from(r.childNodes)}function Ye(r,e){e=""+e,r.data!==e&&(r.data=e)}function ct(r,e){r.value=e??""}function Ue(r,e,t,s){t==null?r.style.removeProperty(e):r.style.setProperty(e,t,"")}function Fn(r,e,t){for(let s=0;s<r.options.length;s+=1){const i=r.options[s];if(i.__value===e){i.selected=!0;return}}(!t||e!==void 0)&&(r.selectedIndex=-1)}function fa(r){const e=r.querySelector(":checked");return e&&e.__value}function ga(r,e,{bubbles:t=!1,cancelable:s=!1}={}){return new CustomEvent(r,{detail:e,bubbles:t,cancelable:s})}let cs;function ns(r){cs=r}function Xi(){if(!cs)throw new Error("Function called outside component initialization");return cs}function Eo(r){Xi().$$.on_mount.push(r)}function ya(r){Xi().$$.on_destroy.push(r)}function wa(){const r=Xi();return(e,t,{cancelable:s=!1}={})=>{const i=r.$$.callbacks[e];if(i){const o=ga(e,t,{cancelable:s});return i.slice().forEach(n=>{n.call(r,o)}),!o.defaultPrevented}return!0}}const Nr=[],Di=[];let Wr=[];const Gi=[],ba=Promise.resolve();let Ui=!1;function _a(){Ui||(Ui=!0,ba.then(To))}function Is(r){Wr.push(r)}function Ea(r){Gi.push(r)}const ui=new Set;let kr=0;function To(){if(kr!==0)return;const r=cs;do{try{for(;kr<Nr.length;){const e=Nr[kr];kr++,ns(e),Ta(e.$$)}}catch(e){throw Nr.length=0,kr=0,e}for(ns(null),Nr.length=0,kr=0;Di.length;)Di.pop()();for(let e=0;e<Wr.length;e+=1){const t=Wr[e];ui.has(t)||(ui.add(t),t())}Wr.length=0}while(Nr.length);for(;Gi.length;)Gi.pop()();Ui=!1,ui.clear(),ns(r)}function Ta(r){if(r.fragment!==null){r.update(),Ut(r.before_update);const e=r.dirty;r.dirty=[-1],r.fragment&&r.fragment.p(r.ctx,e),r.after_update.forEach(Is)}}function va(r){const e=[],t=[];Wr.forEach(s=>r.indexOf(s)===-1?e.push(s):t.push(s)),t.forEach(s=>s()),Wr=e}const Ds=new Set;let Ca;function vo(r,e){r&&r.i&&(Ds.delete(r),r.i(e))}function ka(r,e,t,s){if(r&&r.o){if(Ds.has(r))return;Ds.add(r),Ca.c.push(()=>{Ds.delete(r)}),r.o(e)}}function xs(r){return(r==null?void 0:r.length)!==void 0?r:Array.from(r)}function Sa(r,e,t){const s=r.$$.props[e];s!==void 0&&(r.$$.bound[s]=t,t(r.$$.ctx[s]))}function Fa(r){r&&r.c()}function Co(r,e,t){const{fragment:s,after_update:i}=r.$$;s&&s.m(e,t),Is(()=>{const o=r.$$.on_mount.map(wo).filter(Ki);r.$$.on_destroy?r.$$.on_destroy.push(...o):Ut(o),r.$$.on_mount=[]}),i.forEach(Is)}function ko(r,e){const t=r.$$;t.fragment!==null&&(va(t.after_update),Ut(t.on_destroy),t.fragment&&t.fragment.d(e),t.on_destroy=t.fragment=null,t.ctx=[])}function Pa(r,e){r.$$.dirty[0]===-1&&(Nr.push(r),_a(),r.$$.dirty.fill(0)),r.$$.dirty[e/31|0]|=1<<e%31}function ds(r,e,t,s,i,o,n=null,a=[-1]){const u=cs;ns(r);const h=r.$$={fragment:null,ctx:[],props:o,update:bt,not_equal:i,bound:Sn(),on_mount:[],on_destroy:[],on_disconnect:[],before_update:[],after_update:[],context:new Map(e.context||(u?u.$$.context:[])),callbacks:Sn(),dirty:a,skip_bound:!1,root:e.target||u.$$.root};n&&n(h.root);let p=!1;if(h.ctx=t?t(r,e.props||{},(d,f,...y)=>{const w=y.length?y[0]:f;return h.ctx&&i(h.ctx[d],h.ctx[d]=w)&&(!h.skip_bound&&h.bound[d]&&h.bound[d](w),p&&Pa(r,d)),f}):[],h.update(),p=!0,Ut(h.before_update),h.fragment=s?s(h.ctx):!1,e.target){if(e.hydrate){const d=ma(e.target);h.fragment&&h.fragment.l(d),d.forEach(J)}else h.fragment&&h.fragment.c();e.intro&&vo(r.$$.fragment),Co(r,e.target,e.anchor),To()}ns(u)}class ms{constructor(){H(this,"$$");H(this,"$$set")}$destroy(){ko(this,1),this.$destroy=bt}$on(e,t){if(!Ki(t))return bt;const s=this.$$.callbacks[e]||(this.$$.callbacks[e]=[]);return s.push(t),()=>{const i=s.indexOf(t);i!==-1&&s.splice(i,1)}}$set(e){this.$$set&&!pa(e)&&(this.$$.skip_bound=!0,this.$$set(e),this.$$.skip_bound=!1)}}const Aa="4";typeof window<"u"&&(window.__svelte||(window.__svelte={v:new Set})).v.add(Aa);const Pe="sync_range",mt="sync_conflict_file",Ne="sync_mode",lt="sync_strategy",je="sync_interval",ut="sync_file_type",jt="upload_platform",Xt="upload_sub_platform",So="repository_address",Oa="cloud_address",Ls="repository_branch",Ra="submit_user_name",Pn="submit_user_email",Bs="submit_token",Me="enabled_sync",Ii="ignore_file",Dt="asset_prefix",De="latest_commit_sha",rt="latest_commit_time",es="plugin_config_git_sync_github",zr="plugin_config_git_sync_gitee",ts="plugin_config_cloud_sync_baidu",rs="plugin_config_cloud_sync_ali",St="plugin_config_platform",Fo="https://api.github.com",Po="https://gitee.com/api/v5",Da="temp/plugins/",Gs="temp/git_sync.log",Ga="github_tool_name",Ua="gitee_tool_name",Qe=0,jr=Qe,$r=1,Qi=Qe,Ji=1,Ao=Qe,Oo=1,An="1",Ia=0,xa=1,hi=16,xi=41943040,On=104857600,La=104857600,Ba=104857600,Ma=31457280,Na="base64",ja="base64",Ro="base64",Es=1e3,ve=3e3,wt=0,Sr=1,Rn=0,$a=0,za=1,Ha=2,qa=()=>`_conflict_github_${new Date().getTime()}`,Wa=()=>`_conflict_gitee_${new Date().getTime()}`,pi=()=>`${new Date().toLocaleString()} - 思源笔记同步`,Ts="added",Fr="modified",Rt="removed",vs="renamed",Do=0,Go=1,Li=2,Dn=0,Gn=1,di=2,Jr=3,Va=0,Ya=1,er=0,Un=1,Ka=2,Uo=[".jpg",".jpeg",".png",".gif",".bmp",".webp",".mp4",".avi",".mov",".mkv",".pdf",".doc",".docx",".xls",".xlsx",".ttf",".woff2",".woff",".otf",".eot",".zip",".tar",".gz",".rar",".exe",".dll",".bin",".tmp",".swp",".bak",".swp",".log",".so",".dylib",".dat",".img",".iso",".bz2",".mp3",".wav",".flac",".aac",".wmv",".swf",".apk",".ipa",".jar",".class",".pyc",".o",".obj",".a",".lib",".pdb",".db",".sqlite",".mdb",".accdb",".cur",".ico",".icns",".cab",".msi",".msp",".msu",".nupkg",".deb",".rpm",".pkg",".dmg",".torrent",".crdownload",".part",".log"],Xa=[".lock","temp/*","data/plugins/SGSP/*","data/storage/petal/SGSP/*"],de=["data/plugins/*","data/widgets/*",".lock","temp/*"],Qa="temp/SGSP/backup/";function Bt(r){if(typeof r!="string")throw new TypeError("Path must be a string. Received "+JSON.stringify(r))}function In(r,e){for(var t="",s=0,i=-1,o=0,n,a=0;a<=r.length;++a){if(a<r.length)n=r.charCodeAt(a);else{if(n===47)break;n=47}if(n===47){if(!(i===a-1||o===1))if(i!==a-1&&o===2){if(t.length<2||s!==2||t.charCodeAt(t.length-1)!==46||t.charCodeAt(t.length-2)!==46){if(t.length>2){var u=t.lastIndexOf("/");if(u!==t.length-1){u===-1?(t="",s=0):(t=t.slice(0,u),s=t.length-1-t.lastIndexOf("/")),i=a,o=0;continue}}else if(t.length===2||t.length===1){t="",s=0,i=a,o=0;continue}}e&&(t.length>0?t+="/..":t="..",s=2)}else t.length>0?t+="/"+r.slice(i+1,a):t=r.slice(i+1,a),s=a-i-1;i=a,o=0}else n===46&&o!==-1?++o:o=-1}return t}function Ja(r,e){var t=e.dir||e.root,s=e.base||(e.name||"")+(e.ext||"");return t?t===e.root?t+s:t+r+s:s}var Q={resolve:function(){for(var e="",t=!1,s,i=arguments.length-1;i>=-1&&!t;i--){var o;i>=0?o=arguments[i]:(s===void 0&&(s=process.cwd()),o=s),Bt(o),o.length!==0&&(e=o+"/"+e,t=o.charCodeAt(0)===47)}return e=In(e,!t),t?e.length>0?"/"+e:"/":e.length>0?e:"."},normalize:function(e){if(Bt(e),e.length===0)return".";var t=e.charCodeAt(0)===47,s=e.charCodeAt(e.length-1)===47;return e=In(e,!t),e.length===0&&!t&&(e="."),e.length>0&&s&&(e+="/"),t?"/"+e:e},isAbsolute:function(e){return Bt(e),e.length>0&&e.charCodeAt(0)===47},join:function(){if(arguments.length===0)return".";for(var e,t=0;t<arguments.length;++t){var s=arguments[t];Bt(s),s.length>0&&(e===void 0?e=s:e+="/"+s)}return e===void 0?".":Q.normalize(e)},relative:function(e,t){if(Bt(e),Bt(t),e===t||(e=Q.resolve(e),t=Q.resolve(t),e===t))return"";for(var s=1;s<e.length&&e.charCodeAt(s)===47;++s);for(var i=e.length,o=i-s,n=1;n<t.length&&t.charCodeAt(n)===47;++n);for(var a=t.length,u=a-n,h=o<u?o:u,p=-1,d=0;d<=h;++d){if(d===h){if(u>h){if(t.charCodeAt(n+d)===47)return t.slice(n+d+1);if(d===0)return t.slice(n+d)}else o>h&&(e.charCodeAt(s+d)===47?p=d:d===0&&(p=0));break}var f=e.charCodeAt(s+d),y=t.charCodeAt(n+d);if(f!==y)break;f===47&&(p=d)}var w="";for(d=s+p+1;d<=i;++d)(d===i||e.charCodeAt(d)===47)&&(w.length===0?w+="..":w+="/..");return w.length>0?w+t.slice(n+p):(n+=p,t.charCodeAt(n)===47&&++n,t.slice(n))},_makeLong:function(e){return e},dirname:function(e){if(Bt(e),e.length===0)return".";for(var t=e.charCodeAt(0),s=t===47,i=-1,o=!0,n=e.length-1;n>=1;--n)if(t=e.charCodeAt(n),t===47){if(!o){i=n;break}}else o=!1;return i===-1?s?"/":".":s&&i===1?"//":e.slice(0,i)},basename:function(e,t){if(t!==void 0&&typeof t!="string")throw new TypeError('"ext" argument must be a string');Bt(e);var s=0,i=-1,o=!0,n;if(t!==void 0&&t.length>0&&t.length<=e.length){if(t.length===e.length&&t===e)return"";var a=t.length-1,u=-1;for(n=e.length-1;n>=0;--n){var h=e.charCodeAt(n);if(h===47){if(!o){s=n+1;break}}else u===-1&&(o=!1,u=n+1),a>=0&&(h===t.charCodeAt(a)?--a===-1&&(i=n):(a=-1,i=u))}return s===i?i=u:i===-1&&(i=e.length),e.slice(s,i)}else{for(n=e.length-1;n>=0;--n)if(e.charCodeAt(n)===47){if(!o){s=n+1;break}}else i===-1&&(o=!1,i=n+1);return i===-1?"":e.slice(s,i)}},extname:function(e){Bt(e);for(var t=-1,s=0,i=-1,o=!0,n=0,a=e.length-1;a>=0;--a){var u=e.charCodeAt(a);if(u===47){if(!o){s=a+1;break}continue}i===-1&&(o=!1,i=a+1),u===46?t===-1?t=a:n!==1&&(n=1):t!==-1&&(n=-1)}return t===-1||i===-1||n===0||n===1&&t===i-1&&t===s+1?"":e.slice(t,i)},format:function(e){if(e===null||typeof e!="object")throw new TypeError('The "pathObject" argument must be of type Object. Received type '+typeof e);return Ja("/",e)},parse:function(e){Bt(e);var t={root:"",dir:"",base:"",ext:"",name:""};if(e.length===0)return t;var s=e.charCodeAt(0),i=s===47,o;i?(t.root="/",o=1):o=0;for(var n=-1,a=0,u=-1,h=!0,p=e.length-1,d=0;p>=o;--p){if(s=e.charCodeAt(p),s===47){if(!h){a=p+1;break}continue}u===-1&&(h=!1,u=p+1),s===46?n===-1?n=p:d!==1&&(d=1):n!==-1&&(d=-1)}return n===-1||u===-1||d===0||d===1&&n===u-1&&n===a+1?u!==-1&&(a===0&&i?t.base=t.name=e.slice(1,u):t.base=t.name=e.slice(a,u)):(a===0&&i?(t.name=e.slice(1,n),t.base=e.slice(1,u)):(t.name=e.slice(a,n),t.base=e.slice(a,u)),t.ext=e.slice(n,u)),a>0?t.dir=e.slice(0,a-1):i&&(t.dir="/"),t},sep:"/",delimiter:":",win32:null,posix:null};Q.posix=Q;var it=(r=>(r.WARN="WARN",r.ERROR="ERROR",r.INFO="INFO",r))(it||{});const Tt=class Tt{constructor(){}static getCallerInfo(){const e=new Error().stack;if(!e)return"unknown";const t=e.split(`
-`).map(s=>s.trim());for(const s of t)if(!s.includes("log.ts")){const i=s.match(/\((.*?):(\d+):(\d+)\)$/);if(i){let[,o,n,a]=i;return o=o.split("/").pop()||o,`${o}:${n}:${a}`}}return"unknown"}static formatLog(e,t,...s){const i=new Date().toISOString(),o=Tt.getCallerInfo();let n="";return s!==void 0&&(n=typeof s=="object"?JSON.stringify(s,null,2):String(s)),`[${i}] [${e.toUpperCase()}] [${o}]: ${t} ${n}`}static async log(e,t,...s){if(!Tt.statusLogs[e])return;const i=Tt.formatLog(e,t,s);try{const n=await sl(this.logFilePath)+i;await ss(this.logFilePath,!1,new Blob([n]))}catch(o){console.error("Error writing to log file:",o)}}static updateLogFilePath(e){Tt.logFilePath=e}static getLogFilePath(){return Tt.logFilePath}static async info(e,...t){await Tt.log("INFO",e,t)}static async warn(e,...t){await Tt.log("WARN",e,t)}static async error(e,...t){await Tt.log("ERROR",e,t)}};H(Tt,"logFilePath",Gs),H(Tt,"statusLogs",{INFO:!1,ERROR:!0,WARN:!0});let S=Tt;const Za=async r=>{if((await Ms(Gs)).size>=Ma){let t=`${Gs}-${new Date().getTime()}`;await Bo(Gs,t);let s=await ol();S.error("backupLogFile",s,"oldLogPath:",Q.join(s.workspaceDir,t)),q.showMessage(`${r.message.warn.logfileClearWarn}
-${Q.join(s.workspaceDir,t)}`,wt,"info")}};async function nt(r,e){let t=await q.fetchSyncPost(r,e);return t.code===0?t.data:null}async function Io(){return nt("/api/notebook/lsNotebooks","")}async function el(r){return nt("/api/notebook/createNotebook",{name:r})}async function tl(r){return nt("/api/notebook/getNotebookConf",{notebook:r})}async function Pr(r,e,t){return nt("/api/filetree/createDocWithMd",{notebook:r,path:e,markdown:t})}async function rl(r,e,t,s){return nt("/api/filetree/createDoc",{notebook:r,path:e,title:s,md:t,listDocTree:!1})}async function xn(){return nt("/api/filetree/refreshFiletree",{})}async function xo(r,e,t){return nt("/api/block/updateBlock",{dataType:r,data:e,id:t})}async function Ar(r){return nt("/api/block/getBlockKramdown",{id:r})}async function Lo(r){return nt("/api/query/sql",{stmt:r})}async function Or(r){let e=`select * from blocks where id ='${r}'`;return(await Lo(e))[0]}async function sl(r){let e={path:r},t="/api/file/getFile";return new Promise((s,i)=>{q.fetchPost(t,e,o=>{s(o)})})}const Ms=async r=>{let t=await fetch("/api/file/getFile",{method:"POST",body:JSON.stringify({path:r})});return t.ok?await t.blob():null};async function ss(r,e,t,s){let i=new FormData;return i.append("path",r),i.append("isDir",e.toString()),i.append("modTime",new Date().getTime()+""),i.append("file",t),nt("/api/file/putFile",i)}async function il(r){return nt("/api/file/removeFile",{path:r})}async function Zi(r){let s=await nt("/api/file/readDir",{path:r});return console.info("result:",s),s}async function Bo(r,e){return nt("/api/file/renameFile",{path:r,newPath:e})}async function nl(r){return nt("/api/export/exportMdContent",{id:r})}async function ol(){return nt("/api/system/getWorkspaceInfo",{})}async function al(r){if(typeof r!="string")throw new TypeError("Path must be a string. Received "+JSON.stringify(r));try{r=r.trim().replace(/^\/+|\/+$/g,"").trim();let e=r.lastIndexOf("/"),t=r.slice(0,e+1),s=await Zi(t);for(let i of s)if(t+i.name==r){let o=new Date(i.updated).getTime()*1e3,n=new Date().getTime();return o<n&&(i.updated=o),{isExist:!0,updated:i.updated}}return{isExist:!1}}catch(e){return S.error(`Workspace content read error-existsFileOrDir: ${e}`),{isExist:!1}}}async function ll(r="desktop"){return nt("/api/bazaar/getUpdatedPackage",{frontend:r})}function cl(r){let e,t,s,i,o,n,a,u,h,p,d,f,y,w,v=r[0].path.substring(r[0].path.lastIndexOf("/")+1)+"",_,F,A,P,R;return{c(){e=D("ul"),t=D("li"),s=D("span"),i=nr("svg"),o=nr("use"),a=M(),u=D("span"),u.textContent="删除",h=M(),p=D("span"),p.textContent="1",d=M(),f=D("ul"),y=D("li"),w=D("span"),_=Oe(v),Hs(o,"xlink:href","#iconRight"),T(i,"class",n="b3-list-item__arrow "+(r[2][2]?"b3-list-item__arrow--open":"")),T(s,"class","b3-list-item__toggle b3-list-item__toggle--hl"),Ue(u,"padding-left","4px"),T(u,"class","b3-list-item__text"),T(p,"class","counter"),T(t,"class","b3-list-item"),T(w,"class","b3-list-item__text"),Ue(w,"pointer-events","none"),T(w,"title",F=r[0].path),Ue(y,"padding-left","40px"),T(y,"class","b3-list-item"),T(y,"data-id2","20250124193310-6geystr"),T(y,"data-id","20250124193339-o8kz1n3"),T(f,"class",A=r[2][2]?"":"fn__none"),T(e,"class","b3-list b3-list--background")},m(O,G){ee(O,e,G),b(e,t),b(t,s),b(s,i),b(i,o),b(t,a),b(t,u),b(t,h),b(t,p),b(e,d),b(e,f),b(f,y),b(y,w),b(w,_),P||(R=[Ae(t,"click",r[11]),Ae(y,"click",r[6])],P=!0)},p(O,G){G&4&&n!==(n="b3-list-item__arrow "+(O[2][2]?"b3-list-item__arrow--open":""))&&T(i,"class",n),G&1&&v!==(v=O[0].path.substring(O[0].path.lastIndexOf("/")+1)+"")&&Ye(_,v),G&1&&F!==(F=O[0].path)&&T(w,"title",F),G&4&&A!==(A=O[2][2]?"":"fn__none")&&T(f,"class",A)},d(O){O&&J(e),P=!1,Ut(R)}}}function ul(r){let e,t,s,i,o,n,a,u,h,p,d,f,y,w,v=r[0].path.substring(r[0].path.lastIndexOf("/")+1)+"",_,F,A,P,R;return{c(){e=D("ul"),t=D("li"),s=D("span"),i=nr("svg"),o=nr("use"),a=M(),u=D("span"),u.textContent="添加",h=M(),p=D("span"),p.textContent="1",d=M(),f=D("ul"),y=D("li"),w=D("span"),_=Oe(v),Hs(o,"xlink:href","#iconRight"),T(i,"class",n="b3-list-item__arrow "+(r[2][1]?"b3-list-item__arrow--open":"")),T(s,"class","b3-list-item__toggle b3-list-item__toggle--hl"),Ue(u,"padding-left","4px"),T(u,"class","b3-list-item__text"),T(p,"class","counter"),T(t,"class","b3-list-item"),T(w,"class","b3-list-item__text"),Ue(w,"pointer-events","none"),T(w,"title",F=r[0].path),Ue(y,"padding-left","40px"),T(y,"class","b3-list-item"),T(y,"data-id2","20250124193310-6geystr"),T(y,"data-id","20250124193339-o8kz1n3"),T(f,"class",A=r[2][1]?"":"fn__none"),T(e,"class","b3-list b3-list--background")},m(O,G){ee(O,e,G),b(e,t),b(t,s),b(s,i),b(i,o),b(t,a),b(t,u),b(t,h),b(t,p),b(e,d),b(e,f),b(f,y),b(y,w),b(w,_),P||(R=[Ae(t,"click",r[10]),Ae(y,"click",r[6])],P=!0)},p(O,G){G&4&&n!==(n="b3-list-item__arrow "+(O[2][1]?"b3-list-item__arrow--open":""))&&T(i,"class",n),G&1&&v!==(v=O[0].path.substring(O[0].path.lastIndexOf("/")+1)+"")&&Ye(_,v),G&1&&F!==(F=O[0].path)&&T(w,"title",F),G&4&&A!==(A=O[2][1]?"":"fn__none")&&T(f,"class",A)},d(O){O&&J(e),P=!1,Ut(R)}}}function hl(r){let e,t,s,i,o,n,a,u,h,p,d,f,y,w,v=r[0].path.substring(r[0].path.lastIndexOf("/")+1)+"",_,F,A,P,R;return{c(){e=D("ul"),t=D("li"),s=D("span"),i=nr("svg"),o=nr("use"),a=M(),u=D("span"),u.textContent="更新",h=M(),p=D("span"),p.textContent="1",d=M(),f=D("ul"),y=D("li"),w=D("span"),_=Oe(v),Hs(o,"xlink:href","#iconRight"),T(i,"class",n="b3-list-item__arrow "+(r[2][0]?"b3-list-item__arrow--open":"")),T(s,"class","b3-list-item__toggle b3-list-item__toggle--hl"),Ue(u,"padding-left","4px"),T(u,"class","b3-list-item__text"),T(p,"class","counter"),T(t,"class","b3-list-item"),T(w,"class","b3-list-item__text"),Ue(w,"pointer-events","none"),T(w,"title",F=r[0].path),Ue(y,"padding-left","40px"),T(y,"class","b3-list-item"),T(y,"data-id2","20250124193310-6geystr"),T(y,"data-id","20250124193339-o8kz1n3"),T(f,"class",A=r[2][0]?"":"fn__none"),T(e,"class","b3-list b3-list--background")},m(O,G){ee(O,e,G),b(e,t),b(t,s),b(s,i),b(i,o),b(t,a),b(t,u),b(t,h),b(t,p),b(e,d),b(e,f),b(f,y),b(y,w),b(w,_),P||(R=[Ae(t,"click",r[9]),Ae(y,"click",r[6])],P=!0)},p(O,G){G&4&&n!==(n="b3-list-item__arrow "+(O[2][0]?"b3-list-item__arrow--open":""))&&T(i,"class",n),G&1&&v!==(v=O[0].path.substring(O[0].path.lastIndexOf("/")+1)+"")&&Ye(_,v),G&1&&F!==(F=O[0].path)&&T(w,"title",F),G&4&&A!==(A=O[2][0]?"":"fn__none")&&T(f,"class",A)},d(O){O&&J(e),P=!1,Ut(R)}}}function pl(r){let e,t,s,i,o,n=r[3].id+"",a,u,h,p,d=r[3].datetime+"",f,y,w,v,_,F,A,P,R,O=r[4].id+"",G,x,N,I,te=r[4].datetime+"",C,B,$,K,W,X,Z,z,L,oe,V,Y,le,be=r[3].datetime+"",_e,Le,j,pe=r[3].title+"",se,ae,he,Ee,Re,Ce,Be,Ke,ge,$e,Et=r[4].datetime+"",at,Ze,qe,Pt=r[4].title+"",xt,pt,Lt,m,l,c,g,E,k,U,re,Te,ye,ke,me,Zt,At,lr,cr,Xe,Er,Tr,We,ie,Se;function vr(ce,fe){if(ce[0].status=="modified")return hl;if(ce[0].status=="added")return ul;if(ce[0].status=="removed")return cl}let Cr=vr(r),dt=Cr&&Cr(r);return{c(){e=D("div"),t=D("div"),s=D("span"),i=M(),o=D("code"),a=Oe(n),u=M(),h=D("span"),p=M(),f=Oe(d),y=M(),w=D("span"),v=M(),_=D("span"),_.innerHTML='<svg><use xlink:href="#iconScrollHoriz"></use></svg>',F=M(),A=D("span"),P=M(),R=D("code"),G=Oe(O),x=M(),N=D("span"),I=M(),C=Oe(te),B=M(),$=D("span"),K=M(),W=D("div"),X=D("div"),Z=D("div"),dt&&dt.c(),z=M(),L=D("div"),oe=M(),V=D("div"),Y=D("div"),le=D("div"),_e=Oe(be),Le=M(),j=D("div"),se=Oe(pe),ae=M(),he=D("div"),Ee=M(),Re=D("textarea"),Ke=M(),ge=D("div"),$e=D("div"),at=Oe(Et),Ze=M(),qe=D("div"),xt=Oe(Pt),pt=M(),Lt=D("div"),m=M(),l=D("textarea"),E=M(),k=D("div"),U=M(),re=D("div"),Te=M(),ye=D("div"),ke=M(),me=D("div"),Zt=M(),At=D("div"),lr=M(),cr=D("div"),Xe=M(),Er=D("div"),Tr=M(),We=D("div"),T(s,"class","fn__flex-1"),T(o,"class","fn__code"),T(h,"class","fn__space"),T(w,"class","fn__space"),T(_,"class","block__icon block__icon--show b3-tooltips b3-tooltips__s"),T(_,"aria-label","交换对比方向"),T(_,"data-direct","left"),T(A,"class","fn__space"),T(R,"class","fn__code"),T(N,"class","fn__space"),T($,"class","fn__flex-1"),Ue(t,"padding","0"),Ue(t,"min-height","auto"),T(t,"class","block__icons"),T(e,"class","resize__move b3-dialog__header"),T(Z,"class","history__side"),Ue(Z,"width","undefined"),Ue(Z,"width",r[1]+"px"),T(L,"class","history__resize"),T(le,"class","history__date"),T(j,"class","protyle-title__input ft__center ft__breakword"),T(he,"class","ft__center fn__none"),T(Re,"class","history__text fn__flex-1"),Re.readOnly="",Re.value=Ce=r[3].content,T(Y,"class",Be="fn__flex-1 fn__flex-column "+(r[3].id.length>0?"":"fn__none")),T(V,"class","fn__flex-1 fn__flex"),T(V,"data-type","editors"),T($e,"class","history__date"),T(qe,"class","protyle-title__input ft__center ft__breakword"),T(Lt,"class","ft__center fn__none"),T(l,"class","history__text fn__flex-1"),l.readOnly="",l.value=c=r[4].content,T(ge,"class",g="fn__flex-1 fn__flex-column "+(r[4].id.length>0?"":"fn__none")),Ue(ge,"border-left","1px solid var(--b3-border-color)"),T(X,"class","fn__flex history__panel"),Ue(X,"height","100%"),T(W,"class","b3-dialog__body"),T(k,"class","resize__rd"),T(re,"class","resize__ld"),T(ye,"class","resize__lt"),T(me,"class","resize__rt"),T(At,"class","resize__r"),T(cr,"class","resize__d"),T(Er,"class","resize__t"),T(We,"class","resize__l")},m(ce,fe){ee(ce,e,fe),b(e,t),b(t,s),b(t,i),b(t,o),b(o,a),b(t,u),b(t,h),b(t,p),b(t,f),b(t,y),b(t,w),b(t,v),b(t,_),b(t,F),b(t,A),b(t,P),b(t,R),b(R,G),b(t,x),b(t,N),b(t,I),b(t,C),b(t,B),b(t,$),ee(ce,K,fe),ee(ce,W,fe),b(W,X),b(X,Z),dt&&dt.m(Z,null),b(X,z),b(X,L),b(X,oe),b(X,V),b(V,Y),b(Y,le),b(le,_e),b(Y,Le),b(Y,j),b(j,se),b(Y,ae),b(Y,he),b(Y,Ee),b(Y,Re),b(X,Ke),b(X,ge),b(ge,$e),b($e,at),b(ge,Ze),b(ge,qe),b(qe,xt),b(ge,pt),b(ge,Lt),b(ge,m),b(ge,l),ee(ce,E,fe),ee(ce,k,fe),ee(ce,U,fe),ee(ce,re,fe),ee(ce,Te,fe),ee(ce,ye,fe),ee(ce,ke,fe),ee(ce,me,fe),ee(ce,Zt,fe),ee(ce,At,fe),ee(ce,lr,fe),ee(ce,cr,fe),ee(ce,Xe,fe),ee(ce,Er,fe),ee(ce,Tr,fe),ee(ce,We,fe),ie||(Se=[Ae(_,"click",r[5]),Ae(L,"mousedown",r[8])],ie=!0)},p(ce,[fe]){fe&8&&n!==(n=ce[3].id+"")&&Ye(a,n),fe&8&&d!==(d=ce[3].datetime+"")&&Ye(f,d),fe&16&&O!==(O=ce[4].id+"")&&Ye(G,O),fe&16&&te!==(te=ce[4].datetime+"")&&Ye(C,te),Cr===(Cr=vr(ce))&&dt?dt.p(ce,fe):(dt&&dt.d(1),dt=Cr&&Cr(ce),dt&&(dt.c(),dt.m(Z,null))),fe&2&&Ue(Z,"width",ce[1]+"px"),fe&8&&be!==(be=ce[3].datetime+"")&&Ye(_e,be),fe&8&&pe!==(pe=ce[3].title+"")&&Ye(se,pe),fe&8&&Ce!==(Ce=ce[3].content)&&(Re.value=Ce),fe&8&&Be!==(Be="fn__flex-1 fn__flex-column "+(ce[3].id.length>0?"":"fn__none"))&&T(Y,"class",Be),fe&16&&Et!==(Et=ce[4].datetime+"")&&Ye(at,Et),fe&16&&Pt!==(Pt=ce[4].title+"")&&Ye(xt,Pt),fe&16&&c!==(c=ce[4].content)&&(l.value=c),fe&16&&g!==(g="fn__flex-1 fn__flex-column "+(ce[4].id.length>0?"":"fn__none"))&&T(ge,"class",g)},i:bt,o:bt,d(ce){ce&&(J(e),J(K),J(W),J(E),J(k),J(U),J(re),J(Te),J(ye),J(ke),J(me),J(Zt),J(At),J(lr),J(cr),J(Xe),J(Er),J(Tr),J(We)),dt&&dt.d(),ie=!1,Ut(Se)}}}function dl(r,e,t){let{fileItem:s}=e,i=256,o=0,n=0,a=[!1,!1,!1],u=!1,h={id:"",title:"",datetime:"",content:""},p={id:"",title:"",datetime:"",content:""};const d=()=>{u=!u,t(3,h={id:"",title:"",datetime:"",content:""}),t(4,p={id:"",title:"",datetime:"",content:""}),t(2,a=[!1,!1,!1])},f=async R=>{let O=s.content,G=s.path.substring(s.path.lastIndexOf("/")+1),x=await(await Ms(s.path)).text(),N=s.path.substring(0,s.path.lastIndexOf("/")),I={name:"",updated:0},te=await Zi(N);for(let C of te)if(!C.isDir&&G==C.name){let B=new Date(C.updated).getTime()*1e3;B<new Date().getTime()&&(C.updated=B),I.name=C.name,I.updated=C.updated}u?(t(4,p.id="commit-file",p),t(4,p.title=G,p),t(4,p.datetime=new Date(s.date).toLocaleString(),p),t(4,p.content=O,p),t(3,h.id="local-file",h),t(3,h.title=I.name,h),t(3,h.datetime=new Date(I.updated).toLocaleString(),h),t(3,h.content=x,h)):(t(3,h.id="commit-file",h),t(3,h.title=G,h),t(3,h.datetime=new Date(s.date).toLocaleString(),h),t(3,h.content=O,h),t(4,p.id="local-file",p),t(4,p.title=I.name,p),t(4,p.datetime=new Date(I.updated).toLocaleString(),p),t(4,p.content=x,p))},y=R=>{t(2,a[R]=!a[R],a)},w=R=>{o=R.clientX-n,t(1,i=Math.max(256,o))},v=R=>{n=R.clientX-i,document.addEventListener("mousemove",w),document.addEventListener("mouseup",_)},_=()=>{document.removeEventListener("mousemove",w),document.removeEventListener("mouseup",_)},F=()=>y(0),A=()=>y(1),P=()=>y(2);return r.$$set=R=>{"fileItem"in R&&t(0,s=R.fileItem)},[s,i,a,h,p,d,f,y,v,F,A,P]}class ml extends ms{constructor(e){super(),ds(this,e,dl,pl,ps,{fileItem:0})}}var or=typeof globalThis<"u"?globalThis:typeof window<"u"?window:typeof global<"u"?global:typeof self<"u"?self:{};function fl(r){return r&&r.__esModule&&Object.prototype.hasOwnProperty.call(r,"default")?r.default:r}var ht={},en={},Rr={},Cs={},fs={},qs={},Ws={},gt={},Vs={};(function(r){Object.defineProperty(r,"__esModule",{value:!0}),function(e){e.VerticalReverse="vertical-reverse",e.Horizontal="horizontal",e.HorizontalReverse="horizontal-reverse"}(r.Orientation||(r.Orientation={}))})(Vs);Object.defineProperty(gt,"__esModule",{value:!0});const mi=Vs;function gl(r,e){return typeof r=="boolean"?r:e}gt.booleanOptionOr=gl;function yl(r,e){return typeof r=="number"?r:e}gt.numberOptionOr=yl;function Mo(r,e){return Object.assign({},e.reduce((t,s)=>Object.assign({},t,{[s]:r[s]}),{}))}gt.pick=Mo;function wl(r,e){console.log(JSON.stringify(r.map(t=>Mo(t,e)),null,2))}gt.debug=wl;function No(r){return r===void 0}gt.isUndefined=No;function bl(r={}){return Object.keys(r).reduce((e,t)=>No(r[t])?e:Object.assign({},e,{[t]:r[t]}),{})}gt.withoutUndefinedKeys=bl;function _l(r,e,t){const s=t.style.dot.size,i=r.template.arrow.size,o=s+r.template.arrow.offset,n=Math.PI/7,a=El(r,e,t),u=o*Math.cos(a),h=o*Math.sin(a),p=(o+i)*Math.cos(a-n),d=(o+i)*Math.sin(a-n),f=(o+i/2)*Math.cos(a),y=(o+i/2)*Math.sin(a),w=(o+i)*Math.cos(a+n),v=(o+i)*Math.sin(a+n);return`M${u},${h} L${p},${d} Q${f},${y} ${w},${v} L${w},${v}`}gt.arrowSvgPath=_l;function El(r,e,t){const s=e.x-t.x,i=e.y-t.y,o=r.template.commit.spacing;let n,a;switch(r.orientation){case mi.Orientation.Horizontal:n=i,a=-o;break;case mi.Orientation.HorizontalReverse:n=i,a=o;break;case mi.Orientation.VerticalReverse:n=-o,a=s;break;default:n=o,a=s;break}return r.isVertical?Math.abs(i)>o&&(a=0):Math.abs(s)>o&&(n=0),r.reverseArrow&&(n*=-1,a*=-1),Math.atan2(n,a)}(function(r){Object.defineProperty(r,"__esModule",{value:!0});const e=gt;var t;(function(h){h.Bezier="bezier",h.Straight="straight"})(t||(t={})),r.MergeStyle=t,r.DEFAULT_FONT="normal 12pt Calibri";class s{constructor(p){p.branch=p.branch||{},p.branch.label=p.branch.label||{},p.arrow=p.arrow||{},p.commit=p.commit||{},p.commit.dot=p.commit.dot||{},p.commit.message=p.commit.message||{},this.colors=p.colors||["#000000"],this.branch={color:p.branch.color,lineWidth:p.branch.lineWidth||2,mergeStyle:p.branch.mergeStyle||t.Bezier,spacing:e.numberOptionOr(p.branch.spacing,20),label:{display:e.booleanOptionOr(p.branch.label.display,!0),color:p.branch.label.color||p.commit.color,strokeColor:p.branch.label.strokeColor||p.commit.color,bgColor:p.branch.label.bgColor||"white",font:p.branch.label.font||p.commit.message.font||r.DEFAULT_FONT,borderRadius:e.numberOptionOr(p.branch.label.borderRadius,10)}},this.arrow={size:p.arrow.size||null,color:p.arrow.color||null,offset:p.arrow.offset||2},this.commit={color:p.commit.color,spacing:e.numberOptionOr(p.commit.spacing,25),hasTooltipInCompactMode:e.booleanOptionOr(p.commit.hasTooltipInCompactMode,!0),dot:{color:p.commit.dot.color||p.commit.color,size:p.commit.dot.size||3,strokeWidth:e.numberOptionOr(p.commit.dot.strokeWidth,0),strokeColor:p.commit.dot.strokeColor,font:p.commit.dot.font||p.commit.message.font||"normal 10pt Calibri"},message:{display:e.booleanOptionOr(p.commit.message.display,!0),displayAuthor:e.booleanOptionOr(p.commit.message.displayAuthor,!0),displayHash:e.booleanOptionOr(p.commit.message.displayHash,!0),color:p.commit.message.color||p.commit.color,font:p.commit.message.font||r.DEFAULT_FONT}},this.tag=p.tag||{}}}r.Template=s;const i=new s({colors:["#6963FF","#47E8D4","#6BDB52","#E84BA5","#FFA657"],branch:{color:"#000000",lineWidth:4,spacing:50,mergeStyle:t.Straight},commit:{spacing:60,dot:{size:16,strokeColor:"#000000",strokeWidth:4},message:{color:"black"}},arrow:{size:16,offset:-1.5}});r.blackArrowTemplate=i;const o=new s({colors:["#979797","#008fb5","#f1c109"],branch:{lineWidth:10,spacing:50},commit:{spacing:80,dot:{size:14},message:{font:"normal 14pt Arial"}}});r.metroTemplate=o;var n;(function(h){h.Metro="metro",h.BlackArrow="blackarrow"})(n||(n={})),r.TemplateName=n;function a(h,p){const d=u(h);return p.branch||(p.branch={}),p.commit||(p.commit={}),{colors:p.colors||d.colors,arrow:Object.assign({},d.arrow,p.arrow),branch:Object.assign({},d.branch,p.branch,{label:Object.assign({},d.branch.label,p.branch.label)}),commit:Object.assign({},d.commit,p.commit,{dot:Object.assign({},d.commit.dot,p.commit.dot),message:Object.assign({},d.commit.message,p.commit.message)}),tag:Object.assign({},d.tag,p.tag)}}r.templateExtend=a;function u(h){return h?typeof h=="string"?{[n.BlackArrow]:i,[n.Metro]:o}[h]:h:o}r.getTemplate=u})(Ws);Object.defineProperty(qs,"__esModule",{value:!0});const Tl=Ws,Ln=gt;class vl{constructor(e,t,s,i){this.name=e,this.tagStyle=t,this.commitStyle=i,this.render=s}get style(){return{strokeColor:this.tagStyle.strokeColor||this.commitStyle.color,bgColor:this.tagStyle.bgColor||this.commitStyle.color,color:this.tagStyle.color||"white",font:this.tagStyle.font||this.commitStyle.message.font||Tl.DEFAULT_FONT,borderRadius:Ln.numberOptionOr(this.tagStyle.borderRadius,10),pointerWidth:Ln.numberOptionOr(this.tagStyle.pointerWidth,12)}}}qs.Tag=vl;Object.defineProperty(fs,"__esModule",{value:!0});const Cl=qs,kl=()=>(Math.random().toString(16).substring(3)+Math.random().toString(16).substring(3)+Math.random().toString(16).substring(3)+Math.random().toString(16).substring(3)).substring(0,40);class tn{constructor(e){this.refs=[],this.x=0,this.y=0;let t,s;try{[,t,s]=e.author.match(/(.*) <(.*)>/)}catch{[t,s]=[e.author,""]}this.author={name:t,email:s,timestamp:Date.now()},this.committer={name:t,email:s,timestamp:Date.now()},this.subject=e.subject,this.body=e.body||"",this.hash=e.hash||kl(),this.hashAbbrev=this.hash.substring(0,7),this.parents=e.parents?e.parents:[],this.parentsAbbrev=this.parents.map(i=>i.substring(0,7)),this.style=Object.assign({},e.style,{message:Object.assign({},e.style.message),dot:Object.assign({},e.style.dot)}),this.dotText=e.dotText,this.onClick=()=>e.onClick?e.onClick(this):void 0,this.onMessageClick=()=>e.onMessageClick?e.onMessageClick(this):void 0,this.onMouseOver=()=>e.onMouseOver?e.onMouseOver(this):void 0,this.onMouseOut=()=>e.onMouseOut?e.onMouseOut(this):void 0,this.renderDot=e.renderDot,this.renderMessage=e.renderMessage,this.renderTooltip=e.renderTooltip}get message(){let e="";return this.style.message.displayHash&&(e+=`${this.hashAbbrev} `),e+=this.subject,this.style.message.displayAuthor&&(e+=` - ${this.author.name} <${this.author.email}>`),e}get branchToDisplay(){return this.branches?this.branches[0]:""}setRefs(e){return this.refs=e.getNames(this.hash),this}setTags(e,t,s){return this.tags=e.getNames(this.hash).map(i=>new Cl.Tag(i,t(i),s(i),this.style)),this}setBranches(e){return this.branches=e,this}setPosition({x:e,y:t}){return this.x=e,this.y=t,this}withDefaultColor(e){const t=Object.assign({},this.style,{dot:Object.assign({},this.style.dot),message:Object.assign({},this.style.message)});t.color||(t.color=e),t.dot.color||(t.dot.color=e),t.message.color||(t.message.color=e);const s=this.cloneCommit();return s.style=t,s}cloneCommit(){const e=new tn({author:`${this.author.name} <${this.author.email}>`,subject:this.subject,style:this.style,body:this.body,hash:this.hash,parents:this.parents,dotText:this.dotText,onClick:this.onClick,onMessageClick:this.onMessageClick,onMouseOver:this.onMouseOver,onMouseOut:this.onMouseOut,renderDot:this.renderDot,renderMessage:this.renderMessage,renderTooltip:this.renderTooltip});return e.refs=this.refs,e.branches=this.branches,e.tags=this.tags,e.x=this.x,e.y=this.y,e}}fs.Commit=tn;var Bn;function jo(){if(Bn)return Cs;Bn=1;var r=or&&or.__rest||function(n,a){var u={};for(var h in n)Object.prototype.hasOwnProperty.call(n,h)&&a.indexOf(h)<0&&(u[h]=n[h]);if(n!=null&&typeof Object.getOwnPropertySymbols=="function")for(var p=0,h=Object.getOwnPropertySymbols(n);p<h.length;p++)a.indexOf(h[p])<0&&Object.prototype.propertyIsEnumerable.call(n,h[p])&&(u[h[p]]=n[h[p]]);return u};Object.defineProperty(Cs,"__esModule",{value:!0});const e=fs,t=Ys(),s=gt;class i{constructor(a,u,h){this._branch=a,this.name=a.name,this._graph=u,this._onGraphUpdate=h}branch(a){if(this._branch.isDeleted()&&!this._isReferenced())throw new Error(`Cannot branch from the deleted branch "${this.name}"`);const u=typeof a=="string"?{name:a}:a;return u.from=this,this._graph.createBranch(u).getUserApi()}commit(a){if(this._branch.isDeleted()&&!this._isReferenced())throw new Error(`Cannot commit on the deleted branch "${this.name}"`);return typeof a=="string"&&(a={subject:a}),a||(a={}),this._commitWithParents(a,[]),this._onGraphUpdate(),this}delete(){if(this._graph.refs.getCommit("HEAD")===this._graph.refs.getCommit(this.name))throw new Error(`Cannot delete the checked out branch "${this.name}"`);return[...function*(u,h){const p=(f,y)=>f.commits.find(({hash:w})=>w===y);let d=p(u,u.refs.getCommit(h.name));for(;d&&d.hash!==h.parentCommitHash;)yield d,d=p(u,d.parents[0])}(this._graph,this._branch)].forEach(u=>{u.refs=u.refs.filter(h=>h!==this.name)}),this._graph.refs.delete(this.name),this._graph.branches.delete(this.name),this._branch=t.createDeletedBranch(this._graph,this._branch.style,()=>{}),this._onGraphUpdate(),this}merge(...a){if(this._branch.isDeleted()&&!this._isReferenced())throw new Error(`Cannot merge to the deleted branch "${this.name}"`);let u=a[0];o(u)||(u={branch:a[0],fastForward:!1,commitOptions:{subject:a[1]}});const{branch:h,fastForward:p,commitOptions:d}=u,f=typeof h=="string"?h:h.name,y=this._graph.refs.getCommit(f);if(!y)throw new Error(`The branch called "${f}" is unknown`);let w=!1;if(p){const v=this._graph.refs.getCommit(this._branch.name);v&&(w=this._areCommitsConnected(v,y))}return p&&w?this._fastForwardTo(y):this._commitWithParents(Object.assign({},d,{subject:d&&d.subject||`Merge branch ${f}`}),[y]),this._onGraphUpdate(),this}tag(a){if(this._branch.isDeleted()&&!this._isReferenced())throw new Error(`Cannot tag on the deleted branch "${this.name}"`);return typeof a=="string"?this._graph.getUserApi().tag({name:a,ref:this._branch.name}):this._graph.getUserApi().tag(Object.assign({},a,{ref:this._branch.name})),this}checkout(){if(this._branch.isDeleted()&&!this._isReferenced())throw new Error(`Cannot checkout the deleted branch "${this.name}"`);const a=this._branch,u=this._graph.refs.getCommit(a.name);return this._graph.currentBranch=a,u&&this._graph.refs.set("HEAD",u),this}_commitWithParents(a,u){const h=this._graph.refs.getCommit(this._branch.name);h?u.unshift(h):this._branch.parentCommitHash&&u.unshift(this._branch.parentCommitHash);const{tag:p}=a,d=r(a,["tag"]),f=new e.Commit(Object.assign({hash:this._graph.generateCommitHash(),author:this._branch.commitDefaultOptions.author||this._graph.author,subject:this._branch.commitDefaultOptions.subject||this._graph.commitMessage},d,{parents:u,style:this._getCommitStyle(a.style)}));h?this._graph.refs.getNames(h).forEach(w=>this._graph.refs.set(w,f.hash)):this._graph.refs.set(this._branch.name,f.hash),this._graph.commits.push(f),this.checkout(),p&&this.tag(p)}_areCommitsConnected(a,u){const h=this._graph.commits.find(({hash:d})=>u===d);return!h||h.parents.length===0?!1:h.parents.includes(a)?!0:h.parents.some(d=>this._areCommitsConnected(a,d))}_fastForwardTo(a){this._graph.refs.set(this._branch.name,a)}_getCommitStyle(a={}){return Object.assign({},s.withoutUndefinedKeys(this._graph.template.commit),s.withoutUndefinedKeys(this._branch.commitDefaultOptions.style),a,{message:Object.assign({},s.withoutUndefinedKeys(this._graph.template.commit.message),s.withoutUndefinedKeys(this._branch.commitDefaultOptions.style.message),a.message,s.withoutUndefinedKeys({display:this._graph.shouldDisplayCommitMessage&&void 0})),dot:Object.assign({},s.withoutUndefinedKeys(this._graph.template.commit.dot),s.withoutUndefinedKeys(this._branch.commitDefaultOptions.style.dot),a.dot)})}_isReferenced(){return this._graph.branches.has(this.name)||this._graph.refs.hasName(this.name)||this._graph.commits.reduce((a,{refs:u})=>[...a,...u],[]).includes(this.name)}}Cs.BranchUserApi=i;function o(n){return typeof n=="object"&&!(n instanceof i)}return Cs}var Mn;function Ys(){if(Mn)return Rr;Mn=1,Object.defineProperty(Rr,"__esModule",{value:!0});const r=jo(),e="";Rr.DELETED_BRANCH_NAME=e;class t{constructor(o){this.gitgraph=o.gitgraph,this.name=o.name,this.style=o.style,this.parentCommitHash=o.parentCommitHash,this.commitDefaultOptions=o.commitDefaultOptions||{style:{}},this.onGraphUpdate=o.onGraphUpdate,this.renderLabel=o.renderLabel}getUserApi(){return new r.BranchUserApi(this,this.gitgraph,this.onGraphUpdate)}isDeleted(){return this.name===e}}Rr.Branch=t;function s(i,o,n){return new t({name:e,gitgraph:i,style:o,onGraphUpdate:n})}return Rr.createDeletedBranch=s,Rr}var Ks={},gs={};Object.defineProperty(gs,"__esModule",{value:!0});var Bi;(function(r){r.Compact="compact"})(Bi||(Bi={}));gs.Mode=Bi;var rn={},Xs={};Object.defineProperty(Xs,"__esModule",{value:!0});class Sl{constructor(e){this.rows=new Map,this.maxRowCache=void 0,this.computeRowsFromCommits(e)}getRowOf(e){return this.rows.get(e)||0}getMaxRow(){return this.maxRowCache===void 0&&(this.maxRowCache=Fl(Array.from(this.rows.values())).length-1),this.maxRowCache}computeRowsFromCommits(e){e.forEach((t,s)=>{this.rows.set(t.hash,s)}),this.maxRowCache=void 0}}Xs.RegularGraphRows=Sl;function Fl(r){const e=new Set;return r.forEach(t=>e.add(t)),Array.from(e)}Object.defineProperty(rn,"__esModule",{value:!0});const Pl=Xs;class Al extends Pl.RegularGraphRows{computeRowsFromCommits(e){e.forEach((t,s)=>{let i=s;if(!(s===0)){const n=this.getRowOf(t.parents[0]),a=e[s-1];if(i=Math.max(n+1,this.getRowOf(a.hash)),t.parents.length>1){const h=this.getRowOf(t.parents[1]);n<h&&i++}}this.rows.set(t.hash,i)})}}rn.CompactGraphRows=Al;Object.defineProperty(Ks,"__esModule",{value:!0});const Ol=gs,Rl=rn,$o=Xs;Ks.GraphRows=$o.RegularGraphRows;function Dl(r,e){return r===Ol.Mode.Compact?new Rl.CompactGraphRows(e):new $o.RegularGraphRows(e)}Ks.createGraphRows=Dl;var sn={};Object.defineProperty(sn,"__esModule",{value:!0});class Gl{constructor(e,t,s){this.branches=new Set,this.colors=t,e.forEach(i=>this.branches.add(i.branchToDisplay)),s&&(this.branches=new Set(Array.from(this.branches).sort(s)))}get(e){return Array.from(this.branches).findIndex(t=>t===e)}getColorOf(e){return this.colors[this.get(e)%this.colors.length]}}sn.BranchesOrder=Gl;var ys={};Object.defineProperty(ys,"__esModule",{value:!0});class Ul{constructor(){this.commitPerName=new Map,this.namesPerCommit=new Map}set(e,t){const s=this.commitPerName.get(e);return s&&this.removeNameFrom(s,e),this.addNameTo(t,e),this.addCommitTo(e,t),this}delete(e){return this.hasName(e)&&(this.removeNameFrom(this.getCommit(e),e),this.commitPerName.delete(e)),this}getCommit(e){return this.commitPerName.get(e)}getNames(e){return this.namesPerCommit.get(e)||[]}getAllNames(){return Array.from(this.commitPerName.keys())}hasCommit(e){return this.namesPerCommit.has(e)}hasName(e){return this.commitPerName.has(e)}removeNameFrom(e,t){const s=this.namesPerCommit.get(e)||[];this.namesPerCommit.set(e,s.filter(i=>i!==t))}addNameTo(e,t){const s=this.namesPerCommit.get(e)||[];this.namesPerCommit.set(e,[...s,t])}addCommitTo(e,t){this.commitPerName.set(e,t)}}ys.Refs=Ul;var ws={};Object.defineProperty(ws,"__esModule",{value:!0});const Il=gt;class xl{constructor(e,t,s,i,o,n){this.branchesPaths=new Map,this.commits=e,this.branches=t,this.commitSpacing=s,this.isGraphVertical=i,this.isGraphReverse=o,this.createDeletedBranch=n}execute(){return this.fromCommits(),this.withMergeCommits(),this.smoothBranchesPaths()}fromCommits(){this.commits.forEach(e=>{let t=this.branches.get(e.branchToDisplay);t||(t=this.getDeletedBranchInPath()||this.createDeletedBranch());const s=[],i=this.branchesPaths.get(t),o=this.commits.find(({hash:n})=>n===e.parents[0]);i?s.push(...i):o&&s.push({x:o.x,y:o.y}),s.push({x:e.x,y:e.y}),this.branchesPaths.set(t,s)})}withMergeCommits(){this.commits.filter(({parents:t})=>t.length>1).forEach(t=>{const s=this.commits.find(({hash:a})=>a===t.parents[1]);if(!s)return;const i=s.branches?s.branches[0]:"";let o=this.branches.get(i);if(!o&&(o=this.getDeletedBranchInPath(),!o))return;const n=[...this.branchesPaths.get(o)||[]];this.branchesPaths.set(o,[...n,{x:t.x,y:t.y,mergeCommit:!0}])})}getDeletedBranchInPath(){return Array.from(this.branchesPaths.keys()).find(e=>e.isDeleted())}smoothBranchesPaths(){const e=new Map;return this.branchesPaths.forEach((t,s)=>{if(t.length<=1){e.set(s,[t]);return}this.isGraphVertical?t=t.sort((o,n)=>o.y>n.y?-1:1):t=t.sort((o,n)=>o.x>n.x?1:-1),this.isGraphReverse&&(t=t.reverse());const i=t.reduce((o,n,a)=>{if(n.mergeCommit){o[o.length-1].push(Il.pick(n,["x","y"]));let u=a-1,h=t[u];for(;u>=0&&h.mergeCommit;)u--,h=t[u];u>=0&&o.push([h])}else o[o.length-1].push(n);return o},[[]]);this.isGraphReverse&&i.forEach(o=>o.reverse()),this.isGraphVertical?i.forEach(o=>{if(o.length<=1)return;const n=o[0],a=o[o.length-1],u=o[1].x,h=Math.round(Math.abs(n.y-a.y)/this.commitSpacing)-1,p=h>0?new Array(h).fill(0).map((f,y)=>({x:u,y:o[0].y-this.commitSpacing*(y+1)})):[],d=e.get(s)||[];e.set(s,[...d,[n,...p,a]])}):i.forEach(o=>{if(o.length<=1)return;const n=o[0],a=o[o.length-1],u=o[1].y,h=Math.round(Math.abs(n.x-a.x)/this.commitSpacing)-1,p=h>0?new Array(h).fill(0).map((f,y)=>({y:u,x:o[0].x+this.commitSpacing*(y+1)})):[],d=e.get(s)||[];e.set(s,[...d,[n,...p,a]])})}),e}}ws.BranchesPathsCalculator=xl;function Ll(r,e,t){return r.map(s=>"M"+s.map(({x:i,y:o},n,a)=>{if(e&&a.length>1&&(n===1||n===a.length-1)){const u=a[n-1];if(t){const h=(u.y+o)/2;return`C ${u.x} ${h} ${i} ${h} ${i} ${o}`}else{const h=(u.x+i)/2;return`C ${h} ${u.y} ${h} ${o} ${i} ${o}`}}return`L ${i} ${o}`}).join(" ").slice(1)).join(" ")}ws.toSvgPath=Ll;var Qs={};Object.defineProperty(Qs,"__esModule",{value:!0});const Bl=fs,Ml=Ys(),Nn=ys;class Nl{constructor(e,t){this._graph=e,this._onGraphUpdate=t}clear(){return this._graph.refs=new Nn.Refs,this._graph.tags=new Nn.Refs,this._graph.commits=[],this._graph.branches=new Map,this._graph.currentBranch=this._graph.createBranch("master"),this._onGraphUpdate(),this}commit(e){return this._graph.currentBranch.getUserApi().commit(e),this}branch(e){return this._graph.createBranch(e).getUserApi()}tag(...e){let t,s,i,o;if(typeof e[0]=="string"?(t=e[0],s=e[1]):(t=e[0].name,s=e[0].ref,i=e[0].style,o=e[0].render),!s){const a=this._graph.refs.getCommit("HEAD");if(!a)return this;s=a}let n;if(this._graph.refs.hasCommit(s)&&(n=s),this._graph.refs.hasName(s)&&(n=this._graph.refs.getCommit(s)),!n)throw new Error(`The ref "${s}" does not exist`);return this._graph.tags.set(t,n),this._graph.tagStyles[t]=i,this._graph.tagRenders[t]=o,this._onGraphUpdate(),this}import(e){const t=new Error("Only `git2json` format is supported for imported data.");if(!Array.isArray(e)||!e.every(n=>typeof n=="object"&&typeof n.author=="object"&&Array.isArray(n.refs)))throw t;const i=e.map(n=>Object.assign({},n,{style:Object.assign({},this._graph.template.commit,{message:Object.assign({},this._graph.template.commit.message,{display:this._graph.shouldDisplayCommitMessage})}),author:`${n.author.name} <${n.author.email}>`})).reverse();this.clear(),this._graph.commits=i.map(n=>new Bl.Commit(n)),i.forEach(({refs:n,hash:a})=>{if(!n||!a)return;const u="tag: ";n.map(p=>p.split(u)).map(([p,d])=>d).filter(p=>typeof p=="string").forEach(p=>this._graph.tags.set(p,a)),n.filter(p=>!p.startsWith(u)).forEach(p=>this._graph.refs.set(p,a))});const o=this._getBranches();return this._graph.commits.map(n=>this._withBranches(o,n)).reduce((n,a)=>(a.branches&&a.branches.forEach(u=>n.add(u)),n),new Set).forEach(n=>this.branch(n)),this._onGraphUpdate(),this}_withBranches(e,t){let s=Array.from((e.get(t.hash)||new Set).values());return s.length===0&&(s=[Ml.DELETED_BRANCH_NAME]),t.setBranches(s)}_getBranches(){const e=new Map,t=[];return this._graph.refs.getAllNames().filter(i=>i!=="HEAD").forEach(i=>{const o=this._graph.refs.getCommit(i);for(o&&t.push(o);t.length>0;){const n=t.pop(),a=this._graph.commits.find(({hash:h})=>h===n),u=e.get(n)||new Set;u.add(i),e.set(n,u),a&&a.parents&&a.parents.length>0&&t.push(a.parents[0])}}),e}}Qs.GitgraphUserApi=Nl;Object.defineProperty(en,"__esModule",{value:!0});const fi=Ys(),jl=Ks,$l=gs,jn=sn,zl=Ws,$n=ys,Hl=ws,ks=gt,ur=Vs,ql=Qs;let Wl=class{constructor(e={}){this.refs=new $n.Refs,this.tags=new $n.Refs,this.tagStyles={},this.tagRenders={},this.commits=[],this.branches=new Map,this.listeners=[],this.nextTimeoutId=null,this.template=zl.getTemplate(e.template),this.currentBranch=this.createBranch("master"),this.orientation=e.orientation,this.reverseArrow=ks.booleanOptionOr(e.reverseArrow,!1),this.initCommitOffsetX=ks.numberOptionOr(e.initCommitOffsetX,0),this.initCommitOffsetY=ks.numberOptionOr(e.initCommitOffsetY,0),this.mode=e.mode,this.author=e.author||"Sergio Flores <saxo-guy@epic.com>",this.commitMessage=e.commitMessage||"He doesn't like George Michael! Boooo!",this.generateCommitHash=typeof e.generateCommitHash=="function"?e.generateCommitHash:()=>{},this.branchesOrderFunction=typeof e.compareBranchesOrder=="function"?e.compareBranchesOrder:void 0,this.branchLabelOnEveryCommit=ks.booleanOptionOr(e.branchLabelOnEveryCommit,!1)}get isHorizontal(){return this.orientation===ur.Orientation.Horizontal||this.orientation===ur.Orientation.HorizontalReverse}get isVertical(){return!this.isHorizontal}get isReverse(){return this.orientation===ur.Orientation.HorizontalReverse||this.orientation===ur.Orientation.VerticalReverse}get shouldDisplayCommitMessage(){return!this.isHorizontal&&this.mode!==$l.Mode.Compact}getUserApi(){return new ql.GitgraphUserApi(this,()=>this.next())}subscribe(e){this.listeners.push(e);let t=!0;return()=>{if(!t)return;t=!1;const s=this.listeners.indexOf(e);this.listeners.splice(s,1)}}getRenderedData(){const e=this.computeRenderedCommits(),t=this.computeRenderedBranchesPaths(e),s=this.computeCommitMessagesX(t);return this.computeBranchesColor(e,t),{commits:e,branchesPaths:t,commitMessagesX:s}}createBranch(e){const t="HEAD";let s={gitgraph:this,name:"",parentCommitHash:this.refs.getCommit(t),style:this.template.branch,onGraphUpdate:()=>this.next()};if(typeof e=="string")s.name=e,s.parentCommitHash=this.refs.getCommit(t);else{const o=e.from?e.from.name:t,n=this.refs.getCommit(o)||(this.refs.hasCommit(e.from)?e.from:void 0);e.style=e.style||{},s=Object.assign({},s,e,{parentCommitHash:n,style:Object.assign({},s.style,e.style,{label:Object.assign({},s.style.label,e.style.label)})})}const i=new fi.Branch(s);return this.branches.set(i.name,i),i}computeRenderedCommits(){const e=this.getBranches(),t=(()=>{const a=new Set(this.commits.reduce((p,{hash:d})=>e.has(d)?p:[...p,d],[])),u=this.commits.reduce((p,d)=>d.parents.length>1?[...p,...d.parents.slice(1).map(f=>this.commits.find(({hash:y})=>f===y))]:p,[]),h=new Set;return u.forEach(p=>{let d=p;for(;d&&a.has(d.hash);)h.add(d.hash),d=d.parents.length>0?this.commits.find(({hash:f})=>d.parents[0]===f):void 0}),h})(),s=this.commits.filter(({hash:a})=>e.has(a)||t.has(a)),i=s.map(a=>this.withBranches(e,a)),o=jl.createGraphRows(this.mode,s),n=new jn.BranchesOrder(i,this.template.colors,this.branchesOrderFunction);return i.map(a=>a.setRefs(this.refs)).map(a=>this.withPosition(o,n,a)).map(a=>a.withDefaultColor(this.getBranchDefaultColor(n,a.branchToDisplay))).map(a=>a.setTags(this.tags,u=>Object.assign({},this.tagStyles[u],this.template.tag),u=>this.tagRenders[u]))}computeRenderedBranchesPaths(e){return new Hl.BranchesPathsCalculator(e,this.branches,this.template.commit.spacing,this.isVertical,this.isReverse,()=>fi.createDeletedBranch(this,this.template.branch,()=>this.next())).execute()}computeBranchesColor(e,t){const s=new jn.BranchesOrder(e,this.template.colors,this.branchesOrderFunction);Array.from(t).forEach(([i])=>{i.computedColor=i.style.color||this.getBranchDefaultColor(s,i.name)})}computeCommitMessagesX(e){return Array.from(e).length*this.template.branch.spacing}withBranches(e,t){let s=Array.from((e.get(t.hash)||new Set).values());return s.length===0&&(s=[fi.DELETED_BRANCH_NAME]),t.setBranches(s)}getBranches(){const e=new Map,t=[];return this.refs.getAllNames().filter(i=>i!=="HEAD").forEach(i=>{const o=this.refs.getCommit(i);for(o&&t.push(o);t.length>0;){const n=t.pop(),a=this.commits.find(({hash:h})=>h===n),u=e.get(n)||new Set;u.add(i),e.set(n,u),a&&a.parents&&a.parents.length>0&&t.push(a.parents[0])}}),e}withPosition(e,t,s){const i=e.getRowOf(s.hash),o=e.getMaxRow(),n=t.get(s.branchToDisplay);switch(this.orientation){default:return s.setPosition({x:this.initCommitOffsetX+this.template.branch.spacing*n,y:this.initCommitOffsetY+this.template.commit.spacing*(o-i)});case ur.Orientation.VerticalReverse:return s.setPosition({x:this.initCommitOffsetX+this.template.branch.spacing*n,y:this.initCommitOffsetY+this.template.commit.spacing*i});case ur.Orientation.Horizontal:return s.setPosition({x:this.initCommitOffsetX+this.template.commit.spacing*i,y:this.initCommitOffsetY+this.template.branch.spacing*n});case ur.Orientation.HorizontalReverse:return s.setPosition({x:this.initCommitOffsetX+this.template.commit.spacing*(o-i),y:this.initCommitOffsetY+this.template.branch.spacing*n})}}getBranchDefaultColor(e,t){return e.getColorOf(t)}next(){this.nextTimeoutId&&window.clearTimeout(this.nextTimeoutId),this.nextTimeoutId=window.setTimeout(()=>{this.listeners.forEach(e=>e(this.getRenderedData()))},0)}};en.GitgraphCore=Wl;Object.defineProperty(ht,"__esModule",{value:!0});var Vl=en,Yl=ht.GitgraphCore=Vl.GitgraphCore,Kl=gs,Xl=ht.Mode=Kl.Mode,Ql=Qs;ht.GitgraphUserApi=Ql.GitgraphUserApi;var Jl=jo();ht.BranchUserApi=Jl.BranchUserApi;var Zl=Ys();ht.Branch=Zl.Branch;var ec=fs;ht.Commit=ec.Commit;var tc=qs;ht.Tag=tc.Tag;var rc=ys;ht.Refs=rc.Refs;var nn=Ws,sc=ht.MergeStyle=nn.MergeStyle,ic=ht.TemplateName=nn.TemplateName,nc=ht.templateExtend=nn.templateExtend,oc=Vs,ac=ht.Orientation=oc.Orientation,lc=ws,cc=ht.toSvgPath=lc.toSvgPath,uc=gt,hc=ht.arrowSvgPath=uc.arrowSvgPath,Vt="http://www.w3.org/2000/svg";function pc(r){var e=document.createElementNS(Vt,"svg");return e}function st(r){var e=document.createElementNS(Vt,"g");return r.children.forEach(function(t){return t&&e.appendChild(t)}),r.translate&&e.setAttribute("transform","translate("+r.translate.x+", "+r.translate.y+")"),r.fill&&e.setAttribute("fill",r.fill),r.stroke&&e.setAttribute("stroke",r.stroke),r.strokeWidth&&e.setAttribute("stroke-width",r.strokeWidth.toString()),r.onClick&&e.addEventListener("click",r.onClick),r.onMouseOver&&e.addEventListener("mouseover",r.onMouseOver),r.onMouseOut&&e.addEventListener("mouseout",r.onMouseOut),e}function us(r){var e=document.createElementNS(Vt,"text");return e.setAttribute("alignment-baseline","central"),e.setAttribute("dominant-baseline","central"),e.textContent=r.content,r.fill&&e.setAttribute("fill",r.fill),r.font&&e.setAttribute("style","font: "+r.font),r.anchor&&e.setAttribute("text-anchor",r.anchor),r.translate&&(e.setAttribute("x",r.translate.x.toString()),e.setAttribute("y",r.translate.y.toString())),r.onClick&&e.addEventListener("click",r.onClick),e}function dc(r){var e=document.createElementNS(Vt,"circle");return e.setAttribute("cx",r.radius.toString()),e.setAttribute("cy",r.radius.toString()),e.setAttribute("r",r.radius.toString()),r.id&&e.setAttribute("id",r.id),r.fill&&e.setAttribute("fill",r.fill),e}function mc(r){var e=document.createElementNS(Vt,"rect");return e.setAttribute("width",r.width.toString()),e.setAttribute("height",r.height.toString()),r.borderRadius&&e.setAttribute("rx",r.borderRadius.toString()),r.fill&&e.setAttribute("fill",r.fill||"none"),r.stroke&&e.setAttribute("stroke",r.stroke),e}function Ns(r){var e=document.createElementNS(Vt,"path");return e.setAttribute("d",r.d),r.fill&&e.setAttribute("fill",r.fill),r.stroke&&e.setAttribute("stroke",r.stroke),r.strokeWidth&&e.setAttribute("stroke-width",r.strokeWidth.toString()),r.translate&&e.setAttribute("transform","translate("+r.translate.x+", "+r.translate.y+")"),e}function zn(r){var e=document.createElementNS(Vt,"use");return e.setAttribute("href","#"+r),e.setAttributeNS("http://www.w3.org/1999/xlink","xlink:href","#"+r),e}function fc(){return document.createElementNS(Vt,"clipPath")}function gc(r){var e=document.createElementNS(Vt,"defs");return r.forEach(function(t){return e.appendChild(t)}),e}function yc(r){var e=document.createElementNS(Vt,"foreignObject");e.setAttribute("width",r.width.toString()),r.translate&&(e.setAttribute("x",r.translate.x.toString()),e.setAttribute("y",r.translate.y.toString()));var t=document.createElement("p");return t.textContent=r.content,e.appendChild(t),e}var os=10,zo=5;function wc(r,e){var t=mc({width:0,height:0,borderRadius:r.style.label.borderRadius,stroke:r.style.label.strokeColor||e.style.color,fill:r.style.label.bgColor}),s=us({content:r.name,translate:{x:os,y:0},font:r.style.label.font,fill:r.style.label.color||e.style.color}),i=st({children:[t]}),o=new MutationObserver(function(){var n=s.getBBox(),a=n.height,u=n.width,h=u+2*os,p=a+2*zo;t.setAttribute("width",h.toString()),t.setAttribute("height",p.toString()),s.setAttribute("y",(p/2).toString())});return o.observe(i,{attributes:!1,subtree:!1,childList:!0}),i.appendChild(s),i}var Mi=10,bc=5;function _c(r){var e=Ns({d:"",fill:r.style.bgColor,stroke:r.style.strokeColor}),t=us({content:r.name,fill:r.style.color,font:r.style.font,translate:{x:0,y:0}}),s=st({children:[e]}),i=r.style.pointerWidth,o=new MutationObserver(function(){var n=t.getBBox(),a=n.height,u=n.width;if(!(a===0||u===0)){var h=r.style.borderRadius,p=i+u+2*Mi,d=a+2*bc,f=["M 0,0","L "+i+","+d/2,"V "+d/2,"Q "+i+","+d/2+" "+(i+h)+","+d/2,"H "+(p-h),"Q "+p+","+d/2+" "+p+","+(d/2-h),"V -"+(d/2-h),"Q "+p+",-"+d/2+" "+(p-h)+",-"+d/2,"H "+(i+h),"Q "+i+",-"+d/2+" "+i+",-"+d/2,"V -"+d/2,"z"].join(" ");e.setAttribute("d",f.toString()),t.setAttribute("x",(i+Mi).toString())}});return o.observe(s,{attributes:!1,subtree:!1,childList:!0}),s.appendChild(t),s}var as=10,Mt=10;function Ec(r){var e=Ns({d:"",fill:"#EEE"}),t=us({translate:{x:Mt+as,y:0},content:r.hashAbbrev+" - "+r.subject,fill:"#333"}),s=r.style.dot.size*2,i=st({translate:{x:s,y:s/2},children:[e]}),o=new MutationObserver(function(){var n=t.getBBox().width,a=5,u=50,h=Mt+n+2*as,p=["M 0,0","L "+Mt+","+Mt,"V "+(u/2-a),"Q "+Mt+","+u/2+" "+(Mt+a)+","+u/2,"H "+(h-a),"Q "+h+","+u/2+" "+h+","+(u/2-a),"V -"+(u/2-a),"Q "+h+",-"+u/2+" "+(h-a)+",-"+u/2,"H "+(Mt+a),"Q "+Mt+",-"+u/2+" "+Mt+",-"+(u/2-a),"V -"+Mt,"z"].join(" ");e.setAttribute("d",p.toString())});return o.observe(i,{attributes:!1,subtree:!1,childList:!0}),i.appendChild(t),i}function Tc(r,e){var t={},s={},i=!1,o,n,a=0,u=null,h=pc();f(!!(e&&e.responsive)),r.appendChild(h),e&&e.responsive&&r.setAttribute("style","display:inline-block; position: relative; width:100%; padding-bottom:100%; vertical-align:middle; overflow:hidden;");var p=new Yl(e);return p.subscribe(function(C){i=!0,d(C)}),p.getUserApi();function d(C){t={};var B=C.commits,$=C.branchesPaths;a=C.commitMessagesX,o=C,n=v(B),h.innerHTML="",h.appendChild(st({translate:{x:os,y:as},children:[w($),n]}))}function f(C){var B=new MutationObserver(function(){i?(i=!1,$(),d(o)):(K(),W(C))});B.observe(h,{attributes:!1,subtree:!0,childList:!0});function $(){var X=Array.from(n.children),Z=0,z=p.orientation===ac.VerticalReverse?X:X.reverse();s=z.reduce(function(L,oe){var V=parseInt(oe.getAttribute("transform").split(",")[1].slice(0,-1),10),Y=oe.getElementsByTagName("foreignObject")[0],le=Y&&Y.firstElementChild;return L[V]=V+Z,Z+=Hn(le),L},{})}function K(){if(!p.isHorizontal){var X=10;Object.keys(t).forEach(function(Z){var z=t[Z],L=z.branchLabel,oe=z.tags,V=z.message,Y=a;if(L){y(L,Y);var le=L.getBBox().width+2*os;Y+=le+X}oe.forEach(function(be){y(be,Y);var _e=parseFloat(be.getAttribute("data-offset")||"0"),Le=be.getBBox().width+2*Mi+_e;Y+=Le+X}),V&&y(V,Y)})}}function W(X){var Z=h.getBBox(),z=Z.height,L=Z.width,oe=50,V=20,Y=p.isHorizontal?oe:os+as,le=p.isHorizontal?oe:zo+as+V;X?(h.setAttribute("preserveAspectRatio","xMinYMin meet"),h.setAttribute("viewBox","0 0 "+(L+Y)+" "+(z+le))):(h.setAttribute("width",(L+Y).toString()),h.setAttribute("height",(z+le).toString()))}}function y(C,B){var $=C.getAttribute("transform")||"translate(0, 0)";C.setAttribute("transform",$.replace(/translate\(([\d\.]+),/,"translate("+B+","))}function w(C){var B=p.template.commit.dot.size,$=p.template.branch.mergeStyle===sc.Bezier,K=Array.from(C).map(function(W){var X=W[0],Z=W[1];return Ns({d:cc(Z.map(function(z){return z.map(G)}),$,p.isVertical),fill:"none",stroke:X.computedColor||"",strokeWidth:X.style.lineWidth,translate:{x:B,y:B}})});return st({children:K})}function v(C){return st({children:C.map(B)});function B(K){var W=G(K),X=W.x,Z=W.y;return st({translate:{x:X,y:Z},children:[R(K)].concat($(K),[st({translate:{x:-X,y:0},children:[_(K)].concat(A(K),P(K))})])})}function $(K){if(!p.template.arrow.size)return[null];var W=K.style.dot.size;return K.parents.map(function(X){var Z=C.find(function(oe){var V=oe.hash;return V===X});if(!Z)return null;var z=p.reverseArrow?{x:W+(Z.x-K.x),y:W+(Z.y-K.y)}:{x:W,y:W},L=Ns({d:hc(p,Z,K),fill:p.template.arrow.color||""});return st({translate:z,children:[L]})})}}function _(C){if(!C.style.message.display)return null;var B;if(C.renderMessage)return B=st({children:[]}),F(B),B.appendChild(C.renderMessage(C)),N(C,B),B;var $=us({content:C.message,fill:C.style.message.color||"",font:C.style.message.font,onClick:C.onMessageClick});if(B=st({translate:{x:0,y:C.style.dot.size},children:[$]}),C.body){var K=yc({width:600,translate:{x:10,y:0},content:C.body});F(B),B.appendChild(K)}return N(C,B),B}function F(C){var B=new MutationObserver(function(K){K.forEach(function(W){var X=W.target;return $(X)})});B.observe(C,{attributes:!1,subtree:!1,childList:!0});function $(K){if(K.nodeName==="foreignObject"){var W=K.firstChild&&K.firstChild.parentElement;if(!W)return;W.setAttribute("height",Hn(W.firstElementChild).toString())}K.childNodes.forEach($)}}function A(C){var B=Array.from(p.branches.values());return B.map(function($){if(!$.style.label.display)return null;if(!p.branchLabelOnEveryCommit){var K=p.refs.getCommit($.name);if(C.hash!==K)return null}if(C.branchToDisplay!==$.name)return null;var W=$.renderLabel?$.renderLabel($):wc($,C),X;if(p.isVertical)X=st({children:[W]});else{var Z=C.style.dot.size*2,z=10;X=st({translate:{x:C.x,y:Z+z},children:[W]})}return x(C,X),X})}function P(C){return C.tags?p.isHorizontal?[]:C.tags.map(function(B){var $=B.render?B.render(B.name,B.style):_c(B),K=st({translate:{x:0,y:C.style.dot.size},children:[$]});return K.setAttribute("data-offset",B.style.pointerWidth.toString()),I(C,K),K}):[]}function R(C){if(C.renderDot)return C.renderDot(C);var B=C.hash,$=dc({id:B,radius:C.style.dot.size,fill:C.style.dot.color||""}),K="clip-"+C.hash,W=fc();W.setAttribute("id",K),W.appendChild(zn(B));var X=zn(B);X.setAttribute("clip-path","url(#"+K+")"),X.setAttribute("stroke",C.style.dot.strokeColor||"");var Z=C.style.dot.strokeWidth?C.style.dot.strokeWidth*2:0;X.setAttribute("stroke-width",Z.toString());var z=C.dotText?us({content:C.dotText,font:C.style.dot.font,anchor:"middle",translate:{x:C.style.dot.size,y:C.style.dot.size}}):null;return st({onClick:C.onClick,onMouseOver:function(){O(C),C.onMouseOver()},onMouseOut:function(){u&&u.remove(),C.onMouseOut()},children:[gc([$,W]),X,z]})}function O(C){if(h.firstChild&&!(p.isVertical&&p.mode!==Xl.Compact)&&!(p.isVertical&&!C.style.hasTooltipInCompactMode)){var B=C.renderTooltip?C.renderTooltip(C):Ec(C);u=st({translate:G(C),children:[B]}),h.firstChild.appendChild(u)}}function G(C){var B=C.x,$=C.y;return{x:B,y:s[$]||$}}function x(C,B){t[C.hashAbbrev]||te(C),t[C.hashAbbrev].branchLabel=B}function N(C,B){t[C.hashAbbrev]||te(C),t[C.hashAbbrev].message=B}function I(C,B){t[C.hashAbbrev]||te(C),t[C.hashAbbrev].tags.push(B)}function te(C){t[C.hashAbbrev]={branchLabel:null,tags:[],message:null}}}function Hn(r){var e=0;if(r){var t=r.getBoundingClientRect().height,s=window.getComputedStyle(r).marginTop||"0px",i=parseInt(s.replace("px",""),10);e=t+i}return e}function vc(r){let e,t,s;return{c(){e=D("div"),e.innerHTML="",t=M(),s=D("div"),s.innerHTML="",T(e,"id","gitGraph"),T(s,"class","tooltipGitGraph svelte-1naq546"),T(s,"id","tooltipGitGraphID")},m(i,o){ee(i,e,o),ee(i,t,o),ee(i,s,o)},p:bt,i:bt,o:bt,d(i){i&&(J(e),J(t),J(s))}}}function Cc(r,e,t){const s=wa();let{gitRemoteAPI:i}=e,{gitCommits:o}=e,n={mouseX:0,mouseY:0};Eo(()=>{a()});const a=async()=>{try{const _=document.getElementById("gitGraph"),F=nc(ic.Metro,{branch:{lineWidth:2,spacing:30,label:{font:"bold 6pt Arial",color:"black",borderRadius:5,display:!0}},commit:{spacing:40,dot:{size:5,font:"italic 9pt Arial"},message:{displayAuthor:!0,displayHash:!1,display:!0,color:"#B6B6B6",font:"italic 9pt Arial"},hasTooltipInCompactMode:!0},tag:{color:"black",strokeColor:"black",bgColor:"gray",font:"italic 9pt Arial",borderRadius:2,pointerWidth:10}});for(let R of _.childNodes)_.removeChild(R);const A=Tc(_,{template:F});A.clear();let P=new Array;P.push(...o),P.sort((R,O)=>new Date(R.date).getTime()-new Date(O.date).getTime()),u(P,A),h()}catch(_){S.error("initGitGraph:",_,"stack:",_.stack)}},u=(_,F)=>{let A={};_.forEach(P=>{let R;A[P.name]?R=A[P.name]:(R=F.branch(P.name),A[P.name]=R),R.commit({subject:P.message,author:P.author,onClick:O=>w(O,P),onMouseOver:O=>f(O,P),onMouseOut:O=>y()})})},h=()=>{document.getElementById("gitGraph").addEventListener("mousemove",d)},p=()=>{document.getElementById("gitGraph").removeEventListener("mousemove",d)},d=_=>{n.mouseX=_.clientX,n.mouseY=_.clientY},f=(_,F)=>{p();const A=document.getElementById("gitGraph"),P=document.getElementById("tooltipGitGraphID"),R=A.getBoundingClientRect();P.innerHTML=`<strong>${F.message}</strong><br>
-                                    <em>Author:</em> ${F.author}<${F.email}><br>
-                                    <em>Date:</em> ${F.date}<br>
-                                    <em>Hash:</em> ${F.sha}`,P.style.left=`${n.mouseX-R.left+10}px`,P.style.top=`${n.mouseY-R.top+40}px`,P.style.display="inline-block"},y=(_,F)=>{const A=document.getElementById("tooltipGitGraphID");A.style.display="none",h()},w=(_,F)=>{i.getCommitInfo(F.sha).then(A=>{let P=A.files;v(Ia,F,P)})},v=(_,F,A)=>{s("message",{type:_,message:F,data:A})};return r.$$set=_=>{"gitRemoteAPI"in _&&t(0,i=_.gitRemoteAPI),"gitCommits"in _&&t(1,o=_.gitCommits)},r.$$.update=()=>{r.$$.dirty&2&&o.length>=0&&a()},[i,o]}class kc extends ms{constructor(e){super(),ds(this,e,Cc,vc,ps,{gitRemoteAPI:0,gitCommits:1})}}var Sc=function(r,e){var t=r,s=e,i=t.length,o=s.length,n=!1,a=i+1,u=[],h=[],p,d,f=function(){i>=o&&(p=t,d=i,t=s,s=p,i=o,o=d,n=!0,a=i+1)},y=function(v,_,F,A,P){return{startX:v,startY:_,endX:F,endY:A,r:P}},w=function(v,_,F){var A,P,R,O,G;for(_>F?A=u[v-1+a]:A=u[v+1+a],G=R=Math.max(_,F),O=P=R-v;P<i&&R<o&&t[P]===s[R];)++P,++R;return O==P&&G==R?u[v+a]=A:(u[v+a]=h.length,h[h.length]=new y(O,G,P,R,A)),R};return f(),{compose:function(){var v,_,F,A,P,R,O,G,x,N;for(v=o-i,_=i+o+3,F={},R=0;R<_;++R)F[R]=-1,u[R]=-1;A=-1;do{for(++A,O=-A;O<=v-1;++O)F[O+a]=w(O,F[O-1+a]+1,F[O+1+a]);for(O=v+A;O>=v+1;--O)F[O+a]=w(O,F[O-1+a]+1,F[O+1+a]);F[v+a]=w(v,F[v-1+a]+1,F[v+1+a])}while(F[v+a]!==o);for(ed=v+2*A,P=u[v+a],G=i,x=o,N=[];P!==-1;){let I=h[P];(i!=I.endX||o!=I.endY)&&N.push({file1:[n?I.endY:I.endX,n?x-I.endY:G-I.endX],file2:[n?I.endX:I.endY,n?G-I.endX:x-I.endY]}),G=I.startX,x=I.startY,P=h[P].r}return(G!=0||x!=0)&&N.push({file1:[0,n?x:G],file2:[0,n?G:x]}),N.reverse(),N}}},qn=Sc;function Fc(r,e,t){var s,i=new qn(e,r).compose(),o=new qn(e,t).compose(),n=[];function a($,K){n.push([$.file1[0],K,$.file1[1],$.file2[0],$.file2[1]])}for(s=0;s<i.length;s++)a(i[s],0);for(s=0;s<o.length;s++)a(o[s],2);n.sort(function($,K){return $[0]-K[0]});var u=[],h=0;function p($){$>h&&(u.push([1,h,$-h]),h=$)}for(var d=0;d<n.length;d++){for(var f=d,y=n[d],w=y[0],v=w+y[2];d<n.length-1;){var _=n[d+1],F=_[0];if(F>v)break;v=Math.max(v,F+_[2]),d++}if(p(w),f==d)y[4]>0&&u.push([y[1],y[3],y[4]]);else{var A={0:[r.length,-1,e.length,-1],2:[t.length,-1,e.length,-1]};for(s=f;s<=d;s++){y=n[s];var P=y[1],R=A[P],O=y[0],G=O+y[2],x=y[3],N=x+y[4];R[0]=Math.min(x,R[0]),R[1]=Math.max(N,R[1]),R[2]=Math.min(O,R[2]),R[3]=Math.max(G,R[3])}var I=A[0][0]+(w-A[0][2]),te=A[0][1]+(v-A[0][3]),C=A[2][0]+(w-A[2][2]),B=A[2][1]+(v-A[2][3]);u.push([-1,I,te-I,w,v-w,C,B-C])}h=v}return p(e.length),u}function Pc(r,e,t){var s=[],i=[r,e,t],o=Fc(r,e,t),n=[];function a(){n.length&&s.push({ok:n}),n=[]}function u(y){for(var w=0;w<y.length;w++)n.push(y[w])}function h(y){if(y[2]!=y[6])return!0;for(var w=y[1],v=y[5],_=0;_<y[2];_++)if(r[_+w]!=t[_+v])return!0;return!1}for(var p=0;p<o.length;p++){var d=o[p],f=d[0];f==-1?h(d)?(a(),s.push({conflict:{a:r.slice(d[1],d[1]+d[2]),aIndex:d[1],o:e.slice(d[3],d[3]+d[4]),oIndex:d[3],b:t.slice(d[5],d[5]+d[6]),bIndex:d[5]}})):u(i[0].slice(d[1],d[1]+d[2])):u(i[f].slice(d[1],d[1]+d[2]))}return a(),s}var Ac=Pc;const Oc=fl(Ac);class Ho{isResolved(){return!this.hasConflicts}isConflicted(){return this.hasConflicts}}class hs extends Ho{constructor(e,t,s){super(),this.left=e,this.base=t,this.right=s,this.hasConflicts=!0}static create(e){return new hs(e.left,e.base,e.right)}apply(e){return hs.create({left:e(this.left),base:e(this.base),right:e(this.right)})}}class zt extends Ho{constructor(e){super(),this.hasConflicts=!1,this.result=e}combine(e){this.result=this.result.concat(e.result)}apply(e){return new zt(e(this.result))}}class Kr{constructor(e,t){this.left=e,this.right=t}static executeDiff(e,t){if(!e.push)throw new Error("Argument is not an array");const s=Kr.diff(e,t);return new Dc(e,t,s).convertToTypedOutput()}static diff(e,t){return new Kr(e,t).performDiff()}performDiff(){let e=this.identifyUniquePositions();e.sort((o,n)=>n[0]-o[0]);const[t,s]=this.findNextChange();let i=new Wn(t,s,[]);return e.forEach(o=>{i=this.getDifferences(i,o)}),i.changeRanges}getDifferences(e,t){const[s,i]=[e.leftChangePos,e.rightChangePos],[o,n]=t;if(o<s||n<i)return e;{const[a,u,h,p]=this.findPrevChange(s,i,o-1,n-1),[d,f]=this.findNextChange(o+1,n+1),y=this.appendChangeRange(e.changeRanges,a,u,h,p);return new Wn(d,f,y)}}findNextChange(e=0,t=0){const s=this.left.slice(e)||[],i=this.right.slice(t)||[],o=this.mismatchOffset(s,i);return[e+o,t+o]}findPrevChange(e,t,s,i){if(e>s||t>i)return[e,s,t,i];{const o=this.left.slice(e,s+1).reverse()||[],n=this.right.slice(t,i+1).reverse()||[],a=this.mismatchOffset(o,n);return[e,s-a,t,i-a]}}mismatchOffset(e,t){const s=Math.max(e.length,t.length);for(let i=0;i<s;i++)if(e[i]!==t[i])return i;return Math.min(e.length,t.length)}identifyUniquePositions(){const e=this.findUnique(this.left),t=this.findUnique(this.right),s=new Set(...e.keys()),i=new Set(...t.keys()),n=[...new Set([...s].filter(a=>i.has(a)))].map(a=>[e.get(a),t.get(a)]);return n.unshift([this.left.length,this.right.length]),n}findUnique(e){const t=new Map;e.forEach((i,o)=>{t.set(i,new Rc(o,!t.has(i)))});const s=new Map;for(let[i,o]of t.entries())o.unique&&s.set(i,o.pos);return s}appendChangeRange(e,t,s,i,o){return t<=s&&i<=o?e.push(new gi(Qt.change,t+1,s+1,i+1,o+1)):t<=s?e.push(new gi(Qt.remove,t+1,s+1,i+1,i)):i<=o&&e.push(new gi(Qt.add,t+1,t,i+1,o+1)),e}}class Rc{constructor(e,t){this.pos=e,this.unique=t}}class Ss{constructor(e,t){this.text=e,this.low=t}}class Dc{constructor(e,t,s){this.oldTextArray=e,this.newTextArray=t,this.chunks=s,this.oldText=[],this.newText=[]}convertToTypedOutput(){let e=new Gc(0,0);return this.chunks.forEach(t=>{const[s,i]=this.setTextNodeIndexes(t,e.oldIndex,e.newIndex),[o,n]=this.appendChanges(t,e.oldIndex+s,e.newIndex+i);e.oldIndex=o,e.newIndex=n}),this.setTheRemainingTextNodeIndexes(e.oldIndex,e.newIndex),{oldText:this.oldText,newText:this.newText}}setTextNodeIndexes(e,t,s){let i=0;for(;t+i<e.leftLo-1;)this.oldText.push(new Ss(this.oldTextArray[t+i],s+i)),i+=1;let o=0;for(;s+o<e.rightLo-1;)this.newText.push(new Ss(this.newTextArray[s+o],t+o)),o+=1;return[i,o]}appendChanges(e,t,s){for(;t<=e.leftHi-1;)this.oldText.push(this.oldTextArray[t]),t+=1;for(;s<=e.rightHi-1;)this.newText.push(this.newTextArray[s]),s+=1;return[t,s]}setTheRemainingTextNodeIndexes(e,t){let s=0;for(;e+s<this.oldTextArray.length;)this.oldText.push(new Ss(this.oldTextArray[e+s],t+s)),s+=1;for(;t+s<this.newTextArray.length;)this.newText.push(new Ss(this.newTextArray[t+s],e+s)),s+=1}}class Gc{constructor(e,t){this.oldIndex=e,this.newIndex=t}}var Qt;(function(r){r.change="change",r.add="add",r.remove="remove"})(Qt||(Qt={}));class gi{constructor(e,t,s,i,o){this.action=e,this.leftLo=t,this.leftHi=s,this.rightLo=i,this.rightHi=o}}class Wn{constructor(e,t,s){this.leftChangePos=e,this.rightChangePos=t,this.changeRanges=s}}class js{constructor(e,t,s,i,o){this.code=e,this.baseLo=t,this.baseHi=s,this.sideLo=i,this.sideHi=o}static fromChangeRange(e){return new js(e.action,e.leftLo,e.leftHi,e.rightLo,e.rightHi)}}class on{constructor(e,t,s){this.left=e,this.base=t,this.right=s}static executeDiff(e,t,s){return new on(e,t,s).getDifferences()}getDifferences(){const e=Kr.diff(this.base,this.left).map(s=>js.fromChangeRange(s)),t=Kr.diff(this.base,this.right).map(s=>js.fromChangeRange(s));return this.collapseDifferences(new Vn(e,t))}collapseDifferences(e,t=[]){if(e.isFinished())return t;{const s=new Vn,i=e.chooseSide(),o=e.dequeue();return s.enqueue(i,o),e.switchSides(),this.buildResultQueue(e,o.baseHi,s),t.push(this.determineDifference(s,i,e.switchSides())),this.collapseDifferences(e,t)}}buildResultQueue(e,t,s){if(this.queueIsFinished(e.peek(),t))return s;{const i=e.dequeue();return s.enqueue(e.currentSide,i),t<i.baseHi?(e.switchSides(),this.buildResultQueue(e,i.baseHi,s)):this.buildResultQueue(e,t,s)}}queueIsFinished(e,t){return e.length===0||e[0].baseLo>t+1}determineDifference(e,t,s){const i=e.get(t)[0].baseLo,o=e.get(s),n=o[o.length-1].baseHi,[a,u]=this.diffableEndpoints(e.get(Ve.left),i,n),[h,p]=this.diffableEndpoints(e.get(Ve.right),i,n),d=this.left.slice(a-1,u),f=this.right.slice(h-1,p),y=this.decideAction(e,d,f);return new Uc(y,a,u,h,p,i,n)}diffableEndpoints(e,t,s){if(e.length){const i=e[0],o=e[e.length-1],n=i.sideLo-i.baseLo+t,a=o.sideHi-o.baseHi+s;return[n,a]}else return[t,s]}decideAction(e,t,s){return e.isEmpty(Ve.left)?ir.chooseRight:e.isEmpty(Ve.right)?ir.chooseLeft:t.every((i,o)=>s[o]===i)?ir.noConflictFound:ir.possibleConflict}}class Uc{constructor(e,t,s,i,o,n,a){this.changeType=e,this.leftLo=t,this.leftHi=s,this.rightLo=i,this.rightHi=o,this.baseLo=n,this.baseHi=a}}var ir;(function(r){r.chooseRight="choose_right",r.chooseLeft="choose_left",r.possibleConflict="possible_conflict",r.noConflictFound="no_conflict_found"})(ir||(ir={}));var Ve;(function(r){r.left="left",r.right="right"})(Ve||(Ve={}));class Vn{constructor(e=[],t=[]){this.diffs={left:e,right:t}}dequeue(e=this.currentSide){return this.diffs[e].shift()}peek(e=this.currentSide){return this.diffs[e]}isFinished(){return this.isEmpty(Ve.left)&&this.isEmpty(Ve.right)}enqueue(e=this.currentSide,t){return this.diffs[e].push(t)}get(e=this.currentSide){return this.diffs[e]}isEmpty(e=this.currentSide){return this.diffs[e].length===0}switchSides(e=this.currentSide){return this.currentSide=e===Ve.left?Ve.right:Ve.left}chooseSide(){return this.isEmpty(Ve.left)?this.currentSide=Ve.right:this.isEmpty(Ve.right)?this.currentSide=Ve.left:this.currentSide=this.get(Ve.left)[0].baseLo<=this.get(Ve.right)[0].baseLo?Ve.left:Ve.right,this.currentSide}}class an{static merge(e,t,s){const i=new an(e,t,s);return i.executeThreeWayMerge(),i.result}constructor(e,t,s){this.result=[],this.text3=new Ic(e,s,t)}executeThreeWayMerge(){const e=on.executeDiff(this.text3.left,this.text3.base,this.text3.right);let t=1;e.forEach(i=>{let o=[];for(let n=t;n<i.baseLo;n++)o.push(this.text3.base[n-1]);o.length&&this.result.push(new zt(o)),this.interpretChunk(i),t=i.baseHi+1});const s=this.accumulateLines(t,this.text3.base.length,this.text3.base);s.length&&this.result.push(new zt(s))}setConflict(e){const t=hs.create({left:this.accumulateLines(e.leftLo,e.leftHi,this.text3.left),base:this.accumulateLines(e.baseLo,e.baseHi,this.text3.base),right:this.accumulateLines(e.rightLo,e.rightHi,this.text3.right)});this.result.push(t)}determineConflict(e,t,s){let i=1;e.forEach(n=>{for(let u=i;u<=n.leftLo;u++)this.result.push(new zt(this.accumulateLines(i,u,s)));const a=this.determineOutcome(n,t,s);i=n.rightHi+1,a&&this.result.push(a)});let o=this.accumulateLines(i,s.length+1,s);o.length&&this.result.push(new zt(o))}determineOutcome(e,t,s){return e.action===Qt.change?hs.create({left:this.accumulateLines(e.rightLo,e.rightHi,t),right:this.accumulateLines(e.leftLo,e.leftHi,s),base:[]}):e.action===Qt.add?new zt(this.accumulateLines(e.rightLo,e.rightHi,t)):null}setText(e,t,s){let i=[];for(let o=t;o<=s;o++)i.push(e[o-1]);return i}_conflictRange(e){const t=this.setText(this.text3.right,e.rightLo,e.rightHi),s=this.setText(this.text3.left,e.leftLo,e.leftHi),i=Kr.diff(t,s);(this._assocRange(i,Qt.change)||this._assocRange(i,Qt.remove))&&e.baseLo<=e.baseHi?this.setConflict(e):this.determineConflict(i,s,t)}interpretChunk(e){if(e.changeType==ir.chooseLeft){const t=this.accumulateLines(e.leftLo,e.leftHi,this.text3.left);t.length&&this.result.push(new zt(t))}else if(e.changeType!==ir.possibleConflict){const t=this.accumulateLines(e.rightLo,e.rightHi,this.text3.right);t.length&&this.result.push(new zt(t))}else this._conflictRange(e)}_assocRange(e,t){for(let s=0;s<e.length;s++){let i=e[s];if(i.action===t)return i}return null}accumulateLines(e,t,s){let i=[];for(let o=e;o<=t;o++)s[o-1]&&i.push(s[o-1]);return i}}class Ic{constructor(e,t,s){this.left=e,this.right=t,this.base=s}}class yi{constructor(e,t,s={}){this.results=e,this.joinFunction=t,this.conflictHandler=s.conflictHandler,this.conflict=s.conflict||!1}isSuccess(){return!this.conflict}isConflict(){return!!this.conflict}joinedResults(){if(this.isConflict())return this.conflictHandler?this.conflictHandler(this.results):this.results;{const[e,t]=[this.results[0],this.results.slice(1)];let s=e;return t.forEach(i=>s.combine(i)),s.apply(this.joinFunction).result}}}class ln{static collateMerge(e,t,s){return e.length?(e=ln.combineNonConflicts(e),e.length===1&&e[0].isResolved()?new yi(e,t):new yi(e,t,{conflict:!0,conflictHandler:s})):new yi([new zt([])],t)}static combineNonConflicts(e){let t=[];return e.forEach(s=>{t.length&&t[t.length-1].isResolved()&&s.isResolved()?t[t.length-1].combine(s):t.push(s)}),t}}function xc(r,e,t,s){return function(o){return o.map(n=>{if(n.isResolved())return n.apply(s).result;{const a=n.apply(s),{left:u,right:h}=a;return[r,u,e,h,t].join(`
-`)}}).join(`
-`)}}const qo=r=>r.join(""),Lc=r=>r.split(/\b/),Bc=xc("<<<<<<< YOUR CHANGES","=======",">>>>>>> APP AUTHORS CHANGES",qo),Mc={splitFunction:Lc,joinFunction:qo,conflictFunction:Bc};function Nc(r,e,t,s={}){s=Object.assign({},Mc,s);const[i,o,n]=[r,e,t].map(h=>s.splitFunction.call(s,h)),a=an.merge(i,o,n);return ln.collateMerge(a,s.joinFunction,s.conflictFunction)}class jc{constructor(e){H(this,"value");H(this,"next");this.value=e}}var yt,fr,gr,yo;let $c=(yo=class{constructor(){_s(this,yt);_s(this,fr);_s(this,gr);this.clear()}enqueue(e){const t=new jc(e);Ot(this,yt)?(Ot(this,fr).next=t,Kt(this,fr,t)):(Kt(this,yt,t),Kt(this,fr,t)),ci(this,gr)._++}dequeue(){const e=Ot(this,yt);if(e)return Kt(this,yt,Ot(this,yt).next),ci(this,gr)._--,e.value}peek(){if(Ot(this,yt))return Ot(this,yt).value}clear(){Kt(this,yt,void 0),Kt(this,fr,void 0),Kt(this,gr,0)}get size(){return Ot(this,gr)}*[Symbol.iterator](){let e=Ot(this,yt);for(;e;)yield e.value,e=e.next}*drain(){for(;Ot(this,yt);)yield this.dequeue()}},yt=new WeakMap,fr=new WeakMap,gr=new WeakMap,yo);function Vr(r){Yn(r);const e=new $c;let t=0;const s=()=>{t<r&&e.size>0&&(e.dequeue()(),t++)},i=()=>{t--,s()},o=async(u,h,p)=>{const d=(async()=>u(...p))();h(d);try{await d}catch{}i()},n=(u,h,p)=>{new Promise(d=>{e.enqueue(d)}).then(o.bind(void 0,u,h,p)),(async()=>(await Promise.resolve(),t<r&&s()))()},a=(u,...h)=>new Promise(p=>{n(u,p,h)});return Object.defineProperties(a,{activeCount:{get:()=>t},pendingCount:{get:()=>e.size},clearQueue:{value(){e.clear()}},concurrency:{get:()=>r,set(u){Yn(u),r=u,queueMicrotask(()=>{for(;t<r&&e.size>0;)s()})}}}),a}function Yn(r){if(!((Number.isInteger(r)||r===Number.POSITIVE_INFINITY)&&r>0))throw new TypeError("Expected `concurrency` to be a number from 1 and up")}const mr=class mr{constructor(e){H(this,"name");H(this,"settingUtils");this.name=e}static getInstance(){return mr.instance||(mr.instance=new mr("GlobalAttr")),mr.instance}};H(mr,"instance");let Xr=mr;function Wo(r,e){return function(t,s,i){const o=i.value;return i.value=async function(...n){let a,u=!1;if(r)try{a=await r(n)}catch(f){throw console.error(`[${s}] 前置函数失败:`,f),u=!0,f}let h,p;try{h=o.apply(this,n)}catch(f){p=f}const d=async()=>{if(e&&!u)try{await e(n,a,p?void 0:h,p)}catch(f){console.error(`[${s}] 后置函数内部错误:`,f)}};if(h instanceof Promise)try{const f=await h;return await d(),f}catch(f){throw p=f,await d(),p}else{if(await d(),p)throw p;return h}},i.value.__wrapped=!0,i}}var zc=Object.defineProperty,Hc=Object.getOwnPropertyDescriptor,Vo=(r,e,t,s)=>{for(var i=Hc(e,t),o=r.length-1,n;o>=0;o--)(n=r[o])&&(i=n(e,t,i)||i);return i&&zc(e,t,i),i};const wi=(r,e)=>{let t=new Array,s=0,i=0;for(let o=0;o<r.length;o++){let n=new Blob([r[o]]);if(n.size>e){let a=n.size/r[o].length,u=Math.floor(e/a);for(let h=0;h<r[o].length;h+=u)t[s]||(t[s]=new Array),t[s].push(r[o].slice(h,h+u)),s+=1}else i+=n.size,i<=e?(t[s]||(t[s]=new Array),t[s].push(r[o])):(s+=1,t[s]||(t[s]=new Array),t[s].push(r[o]),i=n.size)}return S.info("chunks:",t),t},bi=r=>{let e=new Blob([r]).size;return S.info("fileSize:",e),e>10*1024*1024?5*1024:10*1024};function _i(r,e=!1){if(e){const t=[];let s=0,i;const o=/(\r\n|\n|\r)/g;for(;(i=o.exec(r))!==null;){const n=i.index;t.push(r.slice(s,n)+i[0]),s=n+i[0].length}return s<r.length&&t.push(r.slice(s)),t}return r.split(/\r?\n/)}const Ni=(r,e)=>{const t=r.toLowerCase();return e.some(s=>s.indexOf("*")===-1?t===s.toLowerCase():new RegExp("^"+s.replace("*",".*").toLowerCase()+"$").test(t))},Ei=(r,e)=>{const t=r.toLowerCase();return e.some(s=>{const i=s.toLowerCase();return i.indexOf("*")===-1?t===i:new RegExp("^"+i.replace("*",".*")+"$").test(t)})};var Wt;const cn=(Wt=class{constructor(e){H(this,"name");this.name=e}static getInstance(){return Wt.instance||(Wt.instance=new Wt("GlobalAttr")),Wt.instance}static parsePath(e){let t,s=e.split(/[\\/]+/);for(let n=0;n<s.length;n++){let a=s[n];if(Yc(a)){t=a;break}}const i=Q.extname(e),o=Q.basename(e,i);return{notebookID:t,docID:o}}async readFileBlob(e,t="raw"){let s;if(t=="markdown"){let i=Q.extname(e),o=Q.basename(e,i),n=await nl(o);const a=/^---\s*\n([\s\S]*?)\n---\s*/;n.content=n.content.replace(a,""),s=new Blob([n.content])}else s=await Ms(e);return s}async putSelectFile(e,t,s,i=de,o="raw",n="create"){if(S.info("excludePatterns",i,e,o,n),!Ni(e,i)){if(n=="create")if(o=="markdown"){let a=e.replace(/\\/g,"/").split("/"),u=a[1],h="/"+a.slice(2).join("/"),p=await s.text(),d=Vc(p);p=p.replace(/^\s*#\s+(.+)/m,""),S.info("contentMD:",p);let f=await tl("notebookId");if(S.info("notebook---conf",f),!f){let y=await el(u),w=a[0]+"/"+y.notebook.id,v=a[0]+"/"+u;await Bo(w,v),S.info("------------create new notebook--------------",y,"-",w,"-",v,"-","-",e,"-")}return await rl(u,h,p,d)}else return await ss(e,t,s);else if(n=="update")if(o=="markdown"){let a=await s.text(),u=Q.extname(e),h=Q.basename(e,u);return S.info(a,u,h),a=a.replace(/^\s*#\s+(.+)/m,""),S.info("contentMD:",a),await xo("markdown",a,h)}else return await ss(e,t,s);return await ss(e,t,s)}}async removeFileCustom(e,t){if(t){let i=Q.extname(e);e=e.replace(i,t)}let s=await Ms(e);if(s){let i=Qa+(e.startsWith("/")?e.slice(1):e);S.info("backupPath:",i),await ss(i,!1,s)}return await il(e)}},H(Wt,"instance"),Wt);Vo([Wo(async r=>{let e=r[0];if(Gt(e)||tt(e)){let t=Xr.getInstance().settingUtils.get(Dt);if(!t||t&&t.length==0)return;await $s({path:e,assetsPrefix:t})}},async r=>{let e=r[0];if(Gt(e)||tt(e)){let t=Xr.getInstance().settingUtils.get(Dt);if(!t||t&&t.length==0)return;await $s({path:e})}})],cn.prototype,"readFileBlob");Vo([Wo(void 0,async r=>{let e=r[0];if(Gt(e)||tt(e)){let t=Xr.getInstance().settingUtils.get(Dt);if(!t||t&&t.length==0)return;await $s({path:e})}})],cn.prototype,"putSelectFile");let Js=cn;const et=Js.getInstance().readFileBlob,ue=Js.getInstance().putSelectFile,Dr=Js.getInstance().removeFileCustom,qc=(r="")=>{const e=r.trim().replace(/\.git$/,""),t=[/^(?:https?:\/\/|git:\/\/)?([^/:]+)\/([^/]+)\/([^/]+)$/,/^git@([^:]+):([^/]+)\/(.+)$/];for(const s of t){const i=e.match(s);if(i){const[,o,n,a]=i;return{host:o,owner:n,repo:a}}}return null},Fs=async r=>{let e=St.endsWith(".json")?St:`${St}.json`,t={upload_platform:Qe,upload_sub_platform:Qe},s=await(r==null?void 0:r.loadData(e));s&&(t=s);let i=t[jt];return i=(i??"")===""?Qe:Number(i),i},Ti=async r=>{let e=St.endsWith(".json")?St:`${St}.json`,t={upload_platform:Qe,upload_sub_platform:Qe},s=await(r==null?void 0:r.loadData(e));s&&(t=s);let i=t[Xt];return i=(i??"")===""?Qe:Number(i),i},Gr=async(r,e)=>{let t=St.endsWith(".json")?St:`${St}.json`,s={upload_platform:Qe,upload_sub_platform:Qe},i=await(r==null?void 0:r.loadData(t));i&&(s=i),s[jt]=e,r==null||r.saveData(t,s)},hr=async(r,e)=>{let t=St.endsWith(".json")?St:`${St}.json`,s={upload_platform:Qe,upload_sub_platform:Qe},i=await(r==null?void 0:r.loadData(t));i&&(s=i),s[Xt]=e,r==null||r.saveData(t,s)},Kn=async(r,e,t,s)=>{let i="";t==jr?s==Qi?(i=es.endsWith(".json")?es:`${es}.json`,e.name=es,e.file=i):s==Ji&&(i=zr.endsWith(".json")?zr:`${zr}.json`,e.name=zr,e.file=i):t==$r&&(s==Ao?(i=ts.endsWith(".json")?ts:`${ts}.json`,e.name=ts,e.file=i):s==Oo&&(i=rs.endsWith(".json")?rs:`${rs}.json`,e.name=rs,e.file=i));let o={upload_platform:Qe,upload_sub_platform:Qe},n=await(r==null?void 0:r.loadData(i));n&&(o=n),Object.entries(o).forEach(([a,u])=>{e.set(a,u)}),await ji(e),e.set(Xt,s),e.load()},ji=async r=>{try{let e=await(r==null?void 0:r.load());Object.entries(e).forEach(([t,s])=>{r.set(t,s)}),e&&e[Me]?(r.enable(mt),r.enable(Pe),r.enable(Ne),r.enable(ut),r.enable(lt),e[Ne]==0?r.enable(je):r.disable(je)):e&&!e[Me]&&(r.disable(mt),r.disable(Pe),r.disable(Ne),r.disable(je),r.disable(ut),r.disable(lt)),r==null||r.disable(De),r==null||r.disable(rt)}catch(e){S.error("Error loading settings storage, probably empty config json-initEnableSettingItem:",e,"stack:",e.stack)}},Ur=async(r="",e="",t="",s=!1)=>{const i=Math.max(bi(r),bi(e),bi(t)),o={isConflict:!1,content:"",conflictContents:[]},n=_i(r,!0),a=_i(e,!0),u=_i(t,!0),h=wi(n,i),p=wi(a,i),d=wi(u,i),f=Vr(navigator.hardwareConcurrency),y=[],w=[],v=[],_=(A,P,R,O)=>new Promise((G,x)=>{Wc(A,P,R,s).then(N=>{S.info("res",N,"chunkIndex:",O),w[O]=N,G()}).catch(N=>{S.error("err",N,"stack:",N.stack),v[O]=N.error,x(new Error(N))})}),F=async()=>{let A=Math.max(h.length,p.length,d.length);for(let P=0;P<A;P++)y.push(f(()=>_(h[P],p[P],d[P],P)));await Promise.all(y)};try{if(await F(),v.length>0)throw new Error("分块三方合并错误");return o.content=w.map(A=>A.content).join(""),o.conflictContents=w.map(A=>A.conflictContents).flat(),o.isConflict=w.map(A=>A.isConflict).some(A=>A===!0),S.info("threadResults:",w,"threeWayMerge:",o),o}catch(A){return S.error("threeWayMerge error:",A,v,w,"stack:",A.stack),{...o,isConflict:!0,conflictContents:[A.message]}}},Wc=async(r=[],e=[],t=[],s)=>{let i={isConflict:!1,content:"",conflictContents:[]},o,n=[];if(s){o=Oc(e,r,t);for(let a of o)a.ok?n.push(a.ok.join("")):(i.isConflict=!0,n.push(`<<<<<<< local
-${a.conflict.a.join("")}
-=======
-${a.conflict.b.join("")}
->>>>>>> remote
-`),i.conflictContents.push(`<<<<<<< local
-${a.conflict.a.join("")}
-=======
-${a.conflict.b.join("")}
->>>>>>> remote
-`))}else{o=Nc(e.join(""),r.join(""),t.join("")),i.isConflict=o.conflict;for(let a of o.results)a.hasConflicts?(i.isConflict=!0,i.conflictContents.push(`<<<<<<< local
-${a.left.join("")}
-=======
-${a.right.join("")}
->>>>>>> remote
-`),n.push(`<<<<<<< local
-${a.left.join("")}
-=======
-${a.right.join("")}
->>>>>>> remote
-`)):n.push(a.result.join(""))}return i.content=n.join(""),i},Ps=async(r,e)=>{let t=!1;if(r){let s=Q.extname(r);Uo.includes(s)&&(t=!0)}return S.info("path:",r,"file:",void 0,"res:",t),t},Vc=r=>{const e=r.match(/^\s*#\s+(.+)/m);return e?e[1]:null},Gt=r=>/^data\/(\d{14}-[a-zA-Z0-9]+)(\/\d{14}-[a-zA-Z0-9]+)*(\.md)?$/.test(r),tt=r=>/^data\/(\d{14}-[a-zA-Z0-9]+)(\/\d{14}-[a-zA-Z0-9]+)*(\.sy)?$/.test(r),Yc=r=>/(\d{14}-[a-z0-9]{7})/g.test(r),Ir=async(r,e="")=>{let t;if(r==$a)t=[""+e];else if(r==za)t=["data"+e];else if(r==Ha){let s="data";t=["data/assets"+e,"data/.siyuan"+e];const i=await Io();for(const o of i.notebooks)t.push(`${s}/${o.id}${e}`)}return S.info("includeFiles:",t),t},$s=async r=>{let{path:e,assetsPrefix:t="assets/"}=r,s="";if(!e)s="select * from spans where type in ('img','textmark a')";else{let{notebookID:n,docID:a}=Js.parsePath(e);s=`select * from spans where box = '${n}' and root_id = '${a}' and type in ('img','textmark a')`}let i=await Lo(s);console.log(i);let o=new RegExp("(?<=\\()\\/*(?:[^/]+\\/)?assets\\/","g");t=t.endsWith("/")?t:t+"/";for(let n=0;n<i.length;n++){console.log(n,i[n]);let a=i[n].markdown;if(o.test(a))a=a.replace(o,t);else{const u=/(!?\[[^\]]+\])(\(([^)]+)\))/,h=a.match(u);if(h){const[p,d,f,y]=h;let w=y.replace(/^[\\\/]+/,"").replace(/\\/g,"/");w=`${t}${w}`;const v=encodeURI(w).replace(/%2F/g,"/");a=`${d}(${v})`}}a!=i[n].markdown&&await xo("markdown",a,i[n].block_id)}};function Xn(r,e,t){const s=r.slice();return s[40]=e[t],s}function Qn(r,e,t){const s=r.slice();return s[43]=e[t],s}function Jn(r){let e,t=xs(r[7]),s=[];for(let i=0;i<t.length;i+=1)s[i]=Zn(Qn(r,t,i));return{c(){for(let i=0;i<s.length;i+=1)s[i].c();e=_o()},m(i,o){for(let n=0;n<s.length;n+=1)s[n]&&s[n].m(i,o);ee(i,e,o)},p(i,o){if(o[0]&128){t=xs(i[7]);let n;for(n=0;n<t.length;n+=1){const a=Qn(i,t,n);s[n]?s[n].p(a,o):(s[n]=Zn(a),s[n].c(),s[n].m(e.parentNode,e))}for(;n<s.length;n+=1)s[n].d(1);s.length=t.length}},d(i){i&&J(e),bo(s,i)}}}function Zn(r){let e,t=r[43].name+"",s,i;return{c(){e=D("option"),s=Oe(t),e.__value=i="data/"+r[43].id,ct(e,e.__value)},m(o,n){ee(o,e,n),b(e,s)},p(o,n){n[0]&128&&t!==(t=o[43].name+"")&&Ye(s,t),n[0]&128&&i!==(i="data/"+o[43].id)&&(e.__value=i,ct(e,e.__value))},d(o){o&&J(e)}}}function eo(r){let e,t=xs(r[8].data),s=[];for(let i=0;i<t.length;i+=1)s[i]=to(Xn(r,t,i));return{c(){for(let i=0;i<s.length;i+=1)s[i].c();e=_o()},m(i,o){for(let n=0;n<s.length;n+=1)s[n]&&s[n].m(i,o);ee(i,e,o)},p(i,o){if(o[0]&100608){t=xs(i[8].data);let n;for(n=0;n<t.length;n+=1){const a=Xn(i,t,n);s[n]?s[n].p(a,o):(s[n]=to(a),s[n].c(),s[n].m(e.parentNode,e))}for(;n<s.length;n+=1)s[n].d(1);s.length=t.length}},d(i){i&&J(e),bo(s,i)}}}function to(r){let e,t,s,i,o=r[8].message.date+"",n,a,u,h,p,d,f=r[8].message.author+"",y,w,v,_,F,A,P,R,O=r[40].status+"",G,x,N=r[40].filename+"",I,te,C,B,$,K=r[40].sha+"",W,X,Z,z=r[8].message.message+"",L,oe,V,Y,le,be,_e,Le;function j(...ae){return r[27](r[40],...ae)}function pe(...ae){return r[28](r[40],...ae)}function se(){return r[29](r[40])}return{c(){e=D("li"),t=D("div"),s=D("div"),i=D("span"),n=Oe(o),a=M(),u=D("span"),h=M(),p=D("span"),d=M(),y=Oe(f),w=M(),v=D("span"),_=M(),F=D("span"),A=M(),P=D("div"),R=Oe("["),G=Oe(O),x=Oe("] "),I=Oe(N),te=M(),C=D("span"),B=M(),$=D("code"),W=Oe(K),X=M(),Z=D("div"),L=Oe(z),oe=M(),V=D("span"),V.innerHTML='<svg><use xlink:href="#iconDownload"></use></svg>',Y=M(),le=D("span"),le.innerHTML='<svg><use xlink:href="#iconUndo"></use></svg>',be=M(),T(i,"data-type","hCreated"),T(u,"class","fn__space"),T(p,"class","fn__space"),T(v,"class","fn__space"),T(F,"class","b3-chip b3-chip--secondary b3-chip--small fn__none"),T(C,"class","fn__space"),T($,"class","fn__code"),T(P,"class","b3-list-item__meta"),T(Z,"class","b3-list-item__meta"),T(t,"class","fn__flex-1"),T(V,"class","b3-list-item__action b3-tooltips b3-tooltips__w"),T(V,"data-type","genTag"),T(V,"aria-label","下载"),T(le,"class","b3-list-item__action b3-tooltips b3-tooltips__w"),T(le,"data-type","rollback"),T(le,"aria-label","回滚"),T(e,"class","b3-list-item b3-list-item--hide-action"),T(e,"data-type","repoitem")},m(ae,he){ee(ae,e,he),b(e,t),b(t,s),b(s,i),b(i,n),b(s,a),b(s,u),b(s,h),b(s,p),b(s,d),b(s,y),b(s,w),b(s,v),b(s,_),b(s,F),b(t,A),b(t,P),b(P,R),b(P,G),b(P,x),b(P,I),b(P,te),b(P,C),b(P,B),b(P,$),b($,W),b(t,X),b(t,Z),b(Z,L),b(e,oe),b(e,V),b(e,Y),b(e,le),b(e,be),_e||(Le=[Ae(V,"click",j),Ae(le,"click",pe),Ae(e,"click",se)],_e=!0)},p(ae,he){r=ae,he[0]&256&&o!==(o=r[8].message.date+"")&&Ye(n,o),he[0]&256&&f!==(f=r[8].message.author+"")&&Ye(y,f),he[0]&256&&O!==(O=r[40].status+"")&&Ye(G,O),he[0]&256&&N!==(N=r[40].filename+"")&&Ye(I,N),he[0]&256&&K!==(K=r[40].sha+"")&&Ye(W,K),he[0]&256&&z!==(z=r[8].message.message+"")&&Ye(L,z)},d(ae){ae&&J(e),_e=!1,Ut(Le)}}}function Kc(r){let e,t,s,i,o,n,a,u,h,p,d,f,y,w,v=r[1].length+"",_,F,A,P,R,O,G,x,N,I,te,C,B,$,K,W,X,Z,z,L,oe,V,Y,le,be,_e,Le,j,pe,se,ae,he,Ee,Re,Ce,Be,Ke,ge,$e,Et,at,Ze,qe,Pt,xt,pt,Lt,m,l,c,g,E,k,U,re,Te,ye,ke,me,Zt,At,lr,cr,Xe=r[7].length>0&&Jn(r);function Er(ie){r[26](ie)}let Tr={gitRemoteAPI:r[0]};r[1]!==void 0&&(Tr.gitCommits=r[1]),Ze=new kc({props:Tr}),Di.push(()=>Sa(Ze,"gitCommits",Er)),Ze.$on("message",r[9]);let We=r[8]&&r[8].data&&r[8].data.length>0&&eo(r);return{c(){e=D("div"),e.innerHTML='<div data-type="doc" class="item item--full item--focus"><span class="fn__flex-1"></span> <span class="item__text">文件同步历史</span> <span class="fn__flex-1"></span></div>',t=M(),s=D("div"),i=D("div"),o=D("div"),n=D("div"),a=D("select"),u=D("option"),u.textContent="本地提交",h=D("option"),h.textContent="远端提交",p=M(),d=D("span"),f=M(),y=D("span"),w=Oe("共"),_=Oe(v),F=Oe("个提交记录"),A=M(),P=D("span"),R=M(),O=D("div"),G=M(),x=D("div"),N=nr("svg"),I=nr("use"),te=M(),C=D("input"),B=M(),$=D("span"),K=M(),W=D("div"),X=D("label"),X.textContent="开始时间：",Z=M(),z=D("input"),L=M(),oe=D("span"),V=M(),Y=D("div"),le=D("label"),le.textContent="结束时间：",be=M(),_e=D("input"),Le=M(),j=D("span"),pe=M(),se=D("select"),ae=D("option"),ae.textContent="工作空间",he=D("option"),he.textContent="所有笔记本",Xe&&Xe.c(),Ee=M(),Re=D("span"),Ce=M(),Be=D("button"),Be.textContent="搜索",Ke=M(),ge=D("div"),$e=D("div"),$e.innerHTML='<img width="64px" src="/stage/loading-pure.svg"/>',Et=M(),at=D("ul"),Fa(Ze.$$.fragment),Pt=M(),xt=D("div"),pt=M(),Lt=D("div"),m=D("ul"),We&&We.c(),l=M(),c=D("div"),g=D("div"),E=M(),k=D("div"),U=D("div"),re=M(),Te=D("div"),ye=D("div"),ke=M(),me=D("div"),Zt=D("div"),T(e,"class","layout-tab-bar fn__flex"),Ue(e,"border-radius","var(--b3-border-radius-b) var(--b3-border-radius-b) 0 0"),u.__value="0",ct(u,u.__value),u.selected=!0,h.__value="1",ct(h,h.__value),T(a,"data-type","notebookselect"),T(a,"class","b3-select"),T(d,"class","fn__space"),T(y,"class","ft__on-surface fn__flex-shrink ft__selectnone"),T(P,"class","fn__space"),T(O,"class","fn__flex-1"),Hs(I,"xlink:href","#iconFileTypeSync"),T(N,"class","b3-form__icon-icon ft__on-surface"),T(C,"class","b3-text-field b3-form__icon-input fn__size200"),T(C,"placeholder","文件ID或/文件路径"),Ue(x,"position","relative"),T($,"class","fn__space"),T(X,"for","startTime"),T(z,"type","datetime-local"),T(z,"class","b3-text-field fn__size200"),T(z,"id","startTime"),T(oe,"class","fn__space"),T(le,"for","endTime"),T(_e,"type","datetime-local"),T(_e,"class","b3-text-field fn__size200"),T(_e,"id","endTime"),T(j,"class","fn__space"),ae.__value="",ct(ae,ae.__value),ae.selected=!0,he.__value="data",ct(he,he.__value),T(se,"data-type","notebookselect"),T(se,"class","b3-select fn__size200"),r[2]===void 0&&Is(()=>r[25].call(se)),T(Re,"class","fn__space"),T(Be,"class","b3-button b3-button--outline"),T(n,"class","block__icons"),T(o,"class","history__action"),T($e,"id","waitloadGitCommitHistory"),Ue($e,"display","none"),T($e,"class","fn__loading"),T(at,"class","b3-list b3-list--background history__side"),Ue(at,"width",r[6]+"px"),T(xt,"class","history__resize"),T(m,"class","b3-list b3-list--background fn__flex-1"),Ue(m,"padding-bottom","8px"),T(Lt,"class","fn__flex-column fn__flex-1"),T(ge,"class","fn__flex fn__flex-1 history__panel"),T(i,"data-type","doc"),T(i,"class","history__repo fn__block"),T(i,"data-init","true"),T(i,"data-page","1"),T(s,"class","fn__flex-1 fn__flex"),T(s,"id","historyContainer"),T(c,"class","resize__rd"),T(g,"class","resize__ld"),T(k,"class","resize__lt"),T(U,"class","resize__rt"),T(Te,"class","resize__r"),T(ye,"class","resize__d"),T(me,"class","resize__t"),T(Zt,"class","resize__l")},m(ie,Se){ee(ie,e,Se),ee(ie,t,Se),ee(ie,s,Se),b(s,i),b(i,o),b(o,n),b(n,a),b(a,u),b(a,h),b(n,p),b(n,d),b(n,f),b(n,y),b(y,w),b(y,_),b(y,F),b(n,A),b(n,P),b(n,R),b(n,O),b(n,G),b(n,x),b(x,N),b(N,I),b(x,te),b(x,C),ct(C,r[3]),b(n,B),b(n,$),b(n,K),b(n,W),b(W,X),b(W,Z),b(W,z),ct(z,r[4]),b(n,L),b(n,oe),b(n,V),b(n,Y),b(Y,le),b(Y,be),b(Y,_e),ct(_e,r[5]),b(n,Le),b(n,j),b(n,pe),b(n,se),b(se,ae),b(se,he),Xe&&Xe.m(se,null),Fn(se,r[2],!0),b(n,Ee),b(n,Re),b(n,Ce),b(n,Be),b(i,Ke),b(i,ge),b(ge,$e),b(ge,Et),b(ge,at),Co(Ze,at,null),b(ge,Pt),b(ge,xt),b(ge,pt),b(ge,Lt),b(Lt,m),We&&We.m(m,null),ee(ie,l,Se),ee(ie,c,Se),ee(ie,g,Se),ee(ie,E,Se),ee(ie,k,Se),ee(ie,U,Se),ee(ie,re,Se),ee(ie,Te,Se),ee(ie,ye,Se),ee(ie,ke,Se),ee(ie,me,Se),ee(ie,Zt,Se),At=!0,lr||(cr=[Ae(a,"change",r[13]),Ae(C,"input",r[22]),Ae(z,"input",r[23]),Ae(z,"input",r[12]),Ae(_e,"input",r[24]),Ae(_e,"input",r[12]),Ae(se,"click",r[17]),Ae(se,"change",r[25]),Ae(Be,"click",r[14]),Ae(xt,"mousedown",r[10])],lr=!0)},p(ie,Se){(!At||Se[0]&2)&&v!==(v=ie[1].length+"")&&Ye(_,v),Se[0]&8&&C.value!==ie[3]&&ct(C,ie[3]),Se[0]&16&&ct(z,ie[4]),Se[0]&32&&ct(_e,ie[5]),ie[7].length>0?Xe?Xe.p(ie,Se):(Xe=Jn(ie),Xe.c(),Xe.m(se,null)):Xe&&(Xe.d(1),Xe=null),Se[0]&132&&Fn(se,ie[2]);const vr={};Se[0]&1&&(vr.gitRemoteAPI=ie[0]),!qe&&Se[0]&2&&(qe=!0,vr.gitCommits=ie[1],Ea(()=>qe=!1)),Ze.$set(vr),(!At||Se[0]&64)&&Ue(at,"width",ie[6]+"px"),ie[8]&&ie[8].data&&ie[8].data.length>0?We?We.p(ie,Se):(We=eo(ie),We.c(),We.m(m,null)):We&&(We.d(1),We=null)},i(ie){At||(vo(Ze.$$.fragment,ie),At=!0)},o(ie){ka(Ze.$$.fragment,ie),At=!1},d(ie){ie&&(J(e),J(t),J(s),J(l),J(c),J(g),J(E),J(k),J(U),J(re),J(Te),J(ye),J(ke),J(me),J(Zt)),Xe&&Xe.d(),ko(Ze),We&&We.d(),lr=!1,Ut(cr)}}}function Xc(r,e,t){const s=Vr(navigator.hardwareConcurrency);let{gitRemoteAPI:i}=e,{branchName:o}=e,{localCommitTime:n}=e,{localCommitSha:a}=e,{i18n:u}=e,h=!1,p,d=new Array,f=a,y="",w="",v={ref:f,parentRef:f},_="",F="",A=256,P=0,R=0,O=[],G;Eo(async()=>{h=!0,p=document.getElementById("waitloadGitCommitHistory"),x()}),ya(async()=>{h=!1});const x=async()=>{if(!f||f.length==0)return;let j=1,pe=100,se=1,ae=!0,he=new Array;for(p.style.removeProperty("display");h&&ae;){const Ee=[];for(let Ce=0;Ce<se&&h;Ce++){let Be=j+Ce;Ee.push(s(()=>i.getCommitsByRef(f,{per_page:pe,page:Be}).catch(Ke=>(S.error(`请求第 ${j} 页失败:`,Ke),[]))))}if(!h)return;const Re=await Promise.all(Ee);Ee.length=0;for(const Ce of Re){if(he.push(...Ce),Ce.length<pe){ae=!1;break}if(!h)return}ae&&(j+=se,se>=navigator.hardwareConcurrency?se=se+Math.floor(Math.log10(se)):se=se*2)}t(1,d=he),p.style.display="none"},N=j=>{t(8,G=j.detail),(!G.data||G.data.length==0)&&q.showMessage(u.noCommitFile,ve,"info"),v.ref=G.message.sha,v.parentRef=G.message.parents[0].sha},I=j=>{P=j.clientX-R,t(6,A=Math.max(256,P))},te=j=>{R=j.clientX-A,document.addEventListener("mousemove",I),document.addEventListener("mouseup",C)},C=()=>{document.removeEventListener("mousemove",I),document.removeEventListener("mouseup",C)},B=async j=>{let pe=Q.extname(j.path).toLowerCase();if(Uo.includes(pe)){q.showMessage(u.binFileCompareNot,ve,"info");return}let se=v.ref;j.status.toLowerCase()=="removed"&&(se=v.parentRef);let ae=await i.getRepoFileContent(j.path,se);j.content=await new Blob([ae.content]).text();let he=new q.Dialog({positionId:"mainHistoryFileCompare",content:'<div id="historyFileCompare" class="fn__flex-column" style="height: 100%;"></div>',width:"90vw",height:"80vh",hideCloseIcon:!1,destroyCallback:Re=>{Ee.$destroy()},resizeCallback:Re=>{}}),Ee=new ml({target:he.element.querySelector("#historyFileCompare"),props:{fileItem:j}})},$=()=>{_&&F&&new Date(_)>new Date(F)&&(q.showMessage(u.dateValidate,ve,"info"),t(5,F=_))},K=j=>{let se=j.target.value;se=="0"?f=a:se=="1"&&(f=o),x()},W=async()=>{if(!f||f.length==0)return;let j=y;t(3,w=w.trim()),p.style.removeProperty("display"),w.startsWith("/")&&(y.length==0&&t(3,w=w.substring(1)),j=y+w),S.info("searchPath:",j);let pe=1,se=100,ae=1,he=!0,Ee=new Array,Re=F;if(f==a){let Ce=new Date(n).getTime();new Date(F).getTime()>Ce?Re=n:Re=F}for(;h&&he;){const Ce=[];for(let Ke=0;Ke<ae&&h;Ke++)Ce.push(s(()=>i.getCommitsInTimeRange({since:_,until:Re,per_page:se,page:pe+Ke},f,j).catch(ge=>(S.error(`请求第 ${pe} 页失败:`,ge),[]))));if(!h)return;const Be=await Promise.all(Ce);Ce.length=0;for(const Ke of Be){if(Ee.push(...Ke),Ke.length<se){he=!1;break}if(!h)return}he&&(pe+=ae,ae>=navigator.hardwareConcurrency?ae=ae+Math.floor(Math.log10(ae)):ae=ae*2)}if(w.length>0){let Ce=new Array;const Be=[];for(let $e of Ee)if(Be.push(s(()=>i.getCommitInfo($e.sha).catch(Et=>(S.error(`请求第 ${pe} 页失败:`,Et),null)))),!h)return;const Ke=await Promise.all(Be);Be.length=0,Ce.push(...Ke);let ge=new Array;for(let $e=0;$e<Ce.length;$e++)Ce[$e].files.filter(at=>at.filename.includes(w)).length>0&&ge.push(Ee[$e]);ge&&ge.length>0?t(1,d=ge):q.showMessage(u.commitsNoFile,ve,"info")}else Ee&&Ee.length>0?t(1,d=Ee):q.showMessage(u.commitsNoFile,ve,"info");p.style.display="none"},X=(j,pe,se)=>{let ae=v.ref;se.toLowerCase()=="removed"&&(ae=v.parentRef),i.getRepoFileContent(pe,ae).then(async he=>{let Ee=Da+"git_repo_sync_file/"+he.path;ue(Ee,!1,new Blob([he.content]),[]).then(()=>{S.info("下载文件到本地：",Ee),q.showMessage(`${u.saveFileWorkSpace} ${Ee}`,wt,"info")})}).catch(he=>{q.showMessage(he.message,ve,"error"),S.error("handleDownLoadFile:",he,"stack:",he.stack)}),j.stopPropagation()},Z=(j,pe,se)=>{let ae=v.ref;se.toLowerCase()=="removed"&&(ae=v.parentRef),q.confirm(u.confirm_rollback_title,u.confirm_rollback_text,he=>{i.getRepoFileContent(pe,ae).then(Ee=>{ue(pe,!1,new Blob([Ee.content])),S.info("下载文件到本地：",pe),q.showMessage(`${u.saveFileWorkSpace} ${pe}`,wt,"info")}).catch(Ee=>{q.showMessage(Ee.message,ve,"error"),S.error("handleRollbackFile:",Ee,"stack:",Ee.stack)})},he=>{he.destroy()}),j.stopPropagation()},z=()=>{Io().then(j=>{t(7,O=j.notebooks)})};function L(){w=this.value,t(3,w)}function oe(){_=this.value,t(4,_)}function V(){F=this.value,t(5,F)}function Y(){y=fa(this),t(2,y),t(7,O)}function le(j){d=j,t(1,d)}const be=(j,pe)=>X(pe,j.filename,j.status),_e=(j,pe)=>Z(pe,j.filename,j.status),Le=j=>B({status:j.status,path:j.filename,sha:j.sha,date:G.message.date});return r.$$set=j=>{"gitRemoteAPI"in j&&t(0,i=j.gitRemoteAPI),"branchName"in j&&t(18,o=j.branchName),"localCommitTime"in j&&t(19,n=j.localCommitTime),"localCommitSha"in j&&t(20,a=j.localCommitSha),"i18n"in j&&t(21,u=j.i18n)},[i,d,y,w,_,F,A,O,G,N,te,B,$,K,W,X,Z,z,o,n,a,u,L,oe,V,Y,le,be,_e,Le]}class Qc extends ms{constructor(e){super(),ds(this,e,Xc,Kc,ps,{gitRemoteAPI:0,branchName:18,localCommitTime:19,localCommitSha:20,i18n:21},null,[-1,-1])}}function Jc(r){let e;return{c(){e=Oe("界面布局")},m(t,s){ee(t,e,s)},p:bt,i:bt,o:bt,d(t){t&&J(e)}}}class Zc extends ms{constructor(e){super(),ds(this,e,null,Jc,ps,{})}}function eu(r){let e,t,s,i,o,n,a,u,h,p,d,f,y,w,v,_,F,A,P,R,O,G,x,N,I,te,C,B,$,K;return B=da(r[5][0]),{c(){e=D("div"),t=D("label"),s=D("input"),i=M(),o=D("span"),n=M(),a=D("div"),a.innerHTML=`⬇️ 下载云端数据覆盖本地                
-                <div class="b3-label__text">将云端最新数据下载后合并到本地数据，本地数据会完全被云端数据覆盖，冲突文档内容为本地文件</div>`,u=M(),h=D("label"),p=D("input"),d=M(),f=D("span"),y=M(),w=D("div"),w.innerHTML=`⬆️ 上传本地数据覆盖云端
-                <div class="b3-label__text">将本地数据上传到云端，云端数据会完全被本地数据覆盖，冲突文档内容为云端文件</div>`,v=M(),_=D("label"),F=D("input"),A=M(),P=D("span"),R=M(),O=D("div"),O.innerHTML=`⚠️ 强制覆盖本地/远端文件
-                <div class="b3-label__text">勾选后，系统会自动强制覆盖本地/远端文件，且不会生成冲突文档</div>`,G=M(),x=D("div"),N=D("button"),N.textContent="取消",I=D("div"),te=M(),C=D("button"),C.textContent="确定",T(s,"type","radio"),T(s,"name","upload"),s.__value="0",ct(s,s.__value),T(o,"class","fn__space"),T(t,"class","fn__flex b3-label"),T(p,"type","radio"),T(p,"name","upload"),p.__value="1",ct(p,p.__value),T(f,"class","fn__space"),T(h,"class","fn__flex b3-label"),T(F,"type","checkbox"),T(F,"name","forceCover"),F.__value="true",ct(F,F.__value),T(P,"class","fn__space"),Ue(O,"color","red"),T(_,"class","fn__flex b3-label"),T(e,"class","b3-dialog__content"),T(N,"class","b3-button b3-button--cancel"),T(I,"class","fn__space"),T(C,"class","b3-button b3-button--text"),T(x,"class","b3-dialog__action"),B.p(s,p)},m(W,X){ee(W,e,X),b(e,t),b(t,s),s.checked=s.__value===r[2],b(t,i),b(t,o),b(t,n),b(t,a),b(e,u),b(e,h),b(h,p),p.checked=p.__value===r[2],b(h,d),b(h,f),b(h,y),b(h,w),b(e,v),b(e,_),b(_,F),F.checked=r[3],b(_,A),b(_,P),b(_,R),b(_,O),ee(W,G,X),ee(W,x,X),b(x,N),b(x,I),b(x,te),b(x,C),$||(K=[Ae(s,"change",r[4]),Ae(p,"change",r[6]),Ae(F,"change",r[7]),Ae(N,"click",function(){Ki(r[1])&&r[1].apply(this,arguments)}),Ae(C,"click",r[8])],$=!0)},p(W,[X]){r=W,X&4&&(s.checked=s.__value===r[2]),X&4&&(p.checked=p.__value===r[2]),X&8&&(F.checked=r[3])},i:bt,o:bt,d(W){W&&(J(e),J(G),J(x)),B.r(),$=!1,Ut(K)}}}function tu(r,e,t){let{confirmCallback:s}=e,{cancelCallback:i}=e,o=-1,n=!1;const a=[[]];function u(){o=this.__value,t(2,o)}function h(){o=this.__value,t(2,o)}function p(){n=this.checked,t(3,n)}const d=()=>s(o,n);return r.$$set=f=>{"confirmCallback"in f&&t(0,s=f.confirmCallback),"cancelCallback"in f&&t(1,i=f.cancelCallback)},[s,i,o,n,u,a,h,p,d]}class ru extends ms{constructor(e){super(),ds(this,e,tu,eu,ps,{confirmCallback:0,cancelCallback:1})}}const su=r=>{let e;switch(r){case"checkbox":e=t=>t.checked;break;case"select":case"slider":case"textinput":case"textarea":e=t=>t.value;break;case"number":e=t=>parseInt(t.value);break;default:e=()=>null;break}return e},iu=r=>{let e;switch(r){case"checkbox":e=(t,s)=>{t.checked=s};break;case"select":case"slider":case"textinput":case"textarea":case"number":e=(t,s)=>{t.value=s};break;default:e=()=>{};break}return e};class ro{constructor(e){H(this,"plugin");H(this,"name");H(this,"file");H(this,"settings",new Map);H(this,"elements",new Map);this.name=e.name??"settings",this.plugin=e.plugin,this.file=this.name.endsWith(".json")?this.name:`${this.name}.json`,this.plugin.setting=new q.Setting({width:e.width,height:e.height,confirmCallback:()=>{for(let s of this.settings.keys())this.updateValueFromElement(s);let t=this.dump();e.callback!==void 0&&e.callback(t),this.plugin.data[this.name]=t,this.save(t)},destroyCallback:()=>{e.destroyCallback!==void 0&&e.destroyCallback();for(let t of this.settings.keys())this.updateElementFromValue(t)}})}async load(){let e=await this.plugin.loadData(this.file);if(e)for(let[t,s]of this.settings)s.value=(e==null?void 0:e[t])??s.value;return this.plugin.data[this.name]=this.dump(),e}async save(e){return e=e??this.dump(),await this.plugin.saveData(this.file,this.dump()),e}get(e){var t;return(t=this.settings.get(e))==null?void 0:t.value}set(e,t){let s=this.settings.get(e);s&&(s.value=t,this.updateElementFromValue(e))}async setAndSave(e,t){let s=this.settings.get(e);s&&(s.value=t,this.updateElementFromValue(e),await this.save())}take(e,t=!1){let s=this.settings.get(e),i=this.elements.get(e);if(i)return t&&this.updateValueFromElement(e),s.getEleVal(i)}async takeAndSave(e){let t=this.take(e,!0);return await this.save(),t}disable(e){let t=this.elements.get(e);t&&(t.disabled=!0)}enable(e){let t=this.elements.get(e);t&&(t.disabled=!1)}dump(){let e={};for(let[t,s]of this.settings)s.type!=="button"&&(e[t]=s.value);return e}addItem(e){if(this.settings.set(e.key,e),e.type==="custom"&&(e.createElement===void 0||e.getEleVal===void 0||e.setEleVal===void 0)){console.error("The custom setting item must have createElement, getEleVal and setEleVal methods");return}if(e.getEleVal===void 0&&(e.getEleVal=su(e.type)),e.setEleVal===void 0&&(e.setEleVal=iu(e.type)),e.createElement===void 0){let i=this.createDefaultElement(e);this.elements.set(e.key,i),this.plugin.setting.addItem({title:e.title,description:e==null?void 0:e.description,direction:e==null?void 0:e.direction,createActionElement:()=>(this.updateElementFromValue(e.key),this.getElement(e.key))})}else this.plugin.setting.addItem({title:e.title,description:e==null?void 0:e.description,direction:e==null?void 0:e.direction,createActionElement:()=>{let i=this.get(e.key),o=e.createElement(i);return this.elements.set(e.key,o),o}})}createDefaultElement(e){var i,o,n,a,u,h,p,d,f;let t;const s=y=>{y.key==="Enter"&&(y.preventDefault(),y.stopImmediatePropagation())};switch(e.type){case"checkbox":let y=document.createElement("input");y.type="checkbox",y.checked=e.value,y.className="b3-switch fn__flex-center",t=y,y.onchange=((i=e.action)==null?void 0:i.callback)??(()=>{});break;case"select":let w=document.createElement("select");w.className="b3-select fn__flex-center fn__size200";let v=(e==null?void 0:e.options)??{};for(let G in v){let x=document.createElement("option"),N=v[G];x.value=G,x.text=N,w.appendChild(x)}w.value=e.value,w.onchange=((o=e.action)==null?void 0:o.callback)??(()=>{}),t=w;break;case"slider":let _=document.createElement("input");_.type="range",_.className="b3-slider fn__size200 b3-tooltips b3-tooltips__n",_.ariaLabel=e.value,_.min=((n=e.slider)==null?void 0:n.min.toString())??"0",_.max=((a=e.slider)==null?void 0:a.max.toString())??"100",_.step=((u=e.slider)==null?void 0:u.step.toString())??"1",_.value=e.value,_.onchange=()=>{var G;_.ariaLabel=_.value,(G=e.action)==null||G.callback()},t=_;break;case"textinput":let F=document.createElement("input");F.className="b3-text-field fn__flex-center fn__size200",F.value=e.value,F.placeholder=e.placeholder,F.onchange=((h=e.action)==null?void 0:h.callback)??(()=>{}),t=F,F.addEventListener("keydown",s);break;case"textarea":let A=document.createElement("textarea");A.className="b3-text-field fn__block",A.value=e.value,A.placeholder=e.placeholder,A.onchange=((p=e.action)==null?void 0:p.callback)??(()=>{}),t=A;break;case"number":let P=document.createElement("input");P.type="number",P.className="b3-text-field fn__flex-center fn__size200",P.value=e.value,t=P,P.addEventListener("keydown",s);break;case"button":let R=document.createElement("button");R.className="b3-button b3-button--outline fn__flex-center fn__size200",R.innerText=((d=e.button)==null?void 0:d.label)??"Button",R.onclick=((f=e.button)==null?void 0:f.callback)??(()=>{}),t=R;break;case"hint":let O=document.createElement("div");O.className="b3-label fn__flex-center",t=O;break}return t}getElement(e){return this.elements.get(e)}updateValueFromElement(e){let t=this.settings.get(e);if(t.type==="button")return;let s=this.elements.get(e);t.value=t.getEleVal(s)}updateElementFromValue(e){let t=this.settings.get(e);if(t.type==="button")return;let s=this.elements.get(e);t.setEleVal(s,t.value)}}var Yr={},Zs={};Zs.byteLength=au;Zs.toByteArray=cu;Zs.fromByteArray=pu;var qt=[],vt=[],nu=typeof Uint8Array<"u"?Uint8Array:Array,vi="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";for(var xr=0,ou=vi.length;xr<ou;++xr)qt[xr]=vi[xr],vt[vi.charCodeAt(xr)]=xr;vt[45]=62;vt[95]=63;function Yo(r){var e=r.length;if(e%4>0)throw new Error("Invalid string. Length must be a multiple of 4");var t=r.indexOf("=");t===-1&&(t=e);var s=t===e?0:4-t%4;return[t,s]}function au(r){var e=Yo(r),t=e[0],s=e[1];return(t+s)*3/4-s}function lu(r,e,t){return(e+t)*3/4-t}function cu(r){var e,t=Yo(r),s=t[0],i=t[1],o=new nu(lu(r,s,i)),n=0,a=i>0?s-4:s,u;for(u=0;u<a;u+=4)e=vt[r.charCodeAt(u)]<<18|vt[r.charCodeAt(u+1)]<<12|vt[r.charCodeAt(u+2)]<<6|vt[r.charCodeAt(u+3)],o[n++]=e>>16&255,o[n++]=e>>8&255,o[n++]=e&255;return i===2&&(e=vt[r.charCodeAt(u)]<<2|vt[r.charCodeAt(u+1)]>>4,o[n++]=e&255),i===1&&(e=vt[r.charCodeAt(u)]<<10|vt[r.charCodeAt(u+1)]<<4|vt[r.charCodeAt(u+2)]>>2,o[n++]=e>>8&255,o[n++]=e&255),o}function uu(r){return qt[r>>18&63]+qt[r>>12&63]+qt[r>>6&63]+qt[r&63]}function hu(r,e,t){for(var s,i=[],o=e;o<t;o+=3)s=(r[o]<<16&16711680)+(r[o+1]<<8&65280)+(r[o+2]&255),i.push(uu(s));return i.join("")}function pu(r){for(var e,t=r.length,s=t%3,i=[],o=16383,n=0,a=t-s;n<a;n+=o)i.push(hu(r,n,n+o>a?a:n+o));return s===1?(e=r[t-1],i.push(qt[e>>2]+qt[e<<4&63]+"==")):s===2&&(e=(r[t-2]<<8)+r[t-1],i.push(qt[e>>10]+qt[e>>4&63]+qt[e<<2&63]+"=")),i.join("")}var un={};/*! ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */un.read=function(r,e,t,s,i){var o,n,a=i*8-s-1,u=(1<<a)-1,h=u>>1,p=-7,d=t?i-1:0,f=t?-1:1,y=r[e+d];for(d+=f,o=y&(1<<-p)-1,y>>=-p,p+=a;p>0;o=o*256+r[e+d],d+=f,p-=8);for(n=o&(1<<-p)-1,o>>=-p,p+=s;p>0;n=n*256+r[e+d],d+=f,p-=8);if(o===0)o=1-h;else{if(o===u)return n?NaN:(y?-1:1)*(1/0);n=n+Math.pow(2,s),o=o-h}return(y?-1:1)*n*Math.pow(2,o-s)};un.write=function(r,e,t,s,i,o){var n,a,u,h=o*8-i-1,p=(1<<h)-1,d=p>>1,f=i===23?Math.pow(2,-24)-Math.pow(2,-77):0,y=s?0:o-1,w=s?1:-1,v=e<0||e===0&&1/e<0?1:0;for(e=Math.abs(e),isNaN(e)||e===1/0?(a=isNaN(e)?1:0,n=p):(n=Math.floor(Math.log(e)/Math.LN2),e*(u=Math.pow(2,-n))<1&&(n--,u*=2),n+d>=1?e+=f/u:e+=f*Math.pow(2,1-d),e*u>=2&&(n++,u/=2),n+d>=p?(a=0,n=p):n+d>=1?(a=(e*u-1)*Math.pow(2,i),n=n+d):(a=e*Math.pow(2,d-1)*Math.pow(2,i),n=0));i>=8;r[t+y]=a&255,y+=w,a/=256,i-=8);for(n=n<<i|a,h+=i;h>0;r[t+y]=n&255,y+=w,n/=256,h-=8);r[t+y-w]|=v*128};/*!
- * The buffer module from node.js, for the browser.
- *
- * @author   Feross Aboukhadijeh <https://feross.org>
- * @license  MIT
- */(function(r){const e=Zs,t=un,s=typeof Symbol=="function"&&typeof Symbol.for=="function"?Symbol.for("nodejs.util.inspect.custom"):null;r.Buffer=a,r.SlowBuffer=A,r.INSPECT_MAX_BYTES=50;const i=2147483647;r.kMaxLength=i,a.TYPED_ARRAY_SUPPORT=o(),!a.TYPED_ARRAY_SUPPORT&&typeof console<"u"&&typeof console.error=="function"&&console.error("This browser lacks typed array (Uint8Array) support which is required by `buffer` v5.x. Use `buffer` v4.x if you require old browser support.");function o(){try{const m=new Uint8Array(1),l={foo:function(){return 42}};return Object.setPrototypeOf(l,Uint8Array.prototype),Object.setPrototypeOf(m,l),m.foo()===42}catch{return!1}}Object.defineProperty(a.prototype,"parent",{enumerable:!0,get:function(){if(a.isBuffer(this))return this.buffer}}),Object.defineProperty(a.prototype,"offset",{enumerable:!0,get:function(){if(a.isBuffer(this))return this.byteOffset}});function n(m){if(m>i)throw new RangeError('The value "'+m+'" is invalid for option "size"');const l=new Uint8Array(m);return Object.setPrototypeOf(l,a.prototype),l}function a(m,l,c){if(typeof m=="number"){if(typeof l=="string")throw new TypeError('The "string" argument must be of type string. Received type number');return d(m)}return u(m,l,c)}a.poolSize=8192;function u(m,l,c){if(typeof m=="string")return f(m,l);if(ArrayBuffer.isView(m))return w(m);if(m==null)throw new TypeError("The first argument must be one of type string, Buffer, ArrayBuffer, Array, or Array-like Object. Received type "+typeof m);if(qe(m,ArrayBuffer)||m&&qe(m.buffer,ArrayBuffer)||typeof SharedArrayBuffer<"u"&&(qe(m,SharedArrayBuffer)||m&&qe(m.buffer,SharedArrayBuffer)))return v(m,l,c);if(typeof m=="number")throw new TypeError('The "value" argument must not be of type number. Received type number');const g=m.valueOf&&m.valueOf();if(g!=null&&g!==m)return a.from(g,l,c);const E=_(m);if(E)return E;if(typeof Symbol<"u"&&Symbol.toPrimitive!=null&&typeof m[Symbol.toPrimitive]=="function")return a.from(m[Symbol.toPrimitive]("string"),l,c);throw new TypeError("The first argument must be one of type string, Buffer, ArrayBuffer, Array, or Array-like Object. Received type "+typeof m)}a.from=function(m,l,c){return u(m,l,c)},Object.setPrototypeOf(a.prototype,Uint8Array.prototype),Object.setPrototypeOf(a,Uint8Array);function h(m){if(typeof m!="number")throw new TypeError('"size" argument must be of type number');if(m<0)throw new RangeError('The value "'+m+'" is invalid for option "size"')}function p(m,l,c){return h(m),m<=0?n(m):l!==void 0?typeof c=="string"?n(m).fill(l,c):n(m).fill(l):n(m)}a.alloc=function(m,l,c){return p(m,l,c)};function d(m){return h(m),n(m<0?0:F(m)|0)}a.allocUnsafe=function(m){return d(m)},a.allocUnsafeSlow=function(m){return d(m)};function f(m,l){if((typeof l!="string"||l==="")&&(l="utf8"),!a.isEncoding(l))throw new TypeError("Unknown encoding: "+l);const c=P(m,l)|0;let g=n(c);const E=g.write(m,l);return E!==c&&(g=g.slice(0,E)),g}function y(m){const l=m.length<0?0:F(m.length)|0,c=n(l);for(let g=0;g<l;g+=1)c[g]=m[g]&255;return c}function w(m){if(qe(m,Uint8Array)){const l=new Uint8Array(m);return v(l.buffer,l.byteOffset,l.byteLength)}return y(m)}function v(m,l,c){if(l<0||m.byteLength<l)throw new RangeError('"offset" is outside of buffer bounds');if(m.byteLength<l+(c||0))throw new RangeError('"length" is outside of buffer bounds');let g;return l===void 0&&c===void 0?g=new Uint8Array(m):c===void 0?g=new Uint8Array(m,l):g=new Uint8Array(m,l,c),Object.setPrototypeOf(g,a.prototype),g}function _(m){if(a.isBuffer(m)){const l=F(m.length)|0,c=n(l);return c.length===0||m.copy(c,0,0,l),c}if(m.length!==void 0)return typeof m.length!="number"||Pt(m.length)?n(0):y(m);if(m.type==="Buffer"&&Array.isArray(m.data))return y(m.data)}function F(m){if(m>=i)throw new RangeError("Attempt to allocate Buffer larger than maximum size: 0x"+i.toString(16)+" bytes");return m|0}function A(m){return+m!=m&&(m=0),a.alloc(+m)}a.isBuffer=function(l){return l!=null&&l._isBuffer===!0&&l!==a.prototype},a.compare=function(l,c){if(qe(l,Uint8Array)&&(l=a.from(l,l.offset,l.byteLength)),qe(c,Uint8Array)&&(c=a.from(c,c.offset,c.byteLength)),!a.isBuffer(l)||!a.isBuffer(c))throw new TypeError('The "buf1", "buf2" arguments must be one of type Buffer or Uint8Array');if(l===c)return 0;let g=l.length,E=c.length;for(let k=0,U=Math.min(g,E);k<U;++k)if(l[k]!==c[k]){g=l[k],E=c[k];break}return g<E?-1:E<g?1:0},a.isEncoding=function(l){switch(String(l).toLowerCase()){case"hex":case"utf8":case"utf-8":case"ascii":case"latin1":case"binary":case"base64":case"ucs2":case"ucs-2":case"utf16le":case"utf-16le":return!0;default:return!1}},a.concat=function(l,c){if(!Array.isArray(l))throw new TypeError('"list" argument must be an Array of Buffers');if(l.length===0)return a.alloc(0);let g;if(c===void 0)for(c=0,g=0;g<l.length;++g)c+=l[g].length;const E=a.allocUnsafe(c);let k=0;for(g=0;g<l.length;++g){let U=l[g];if(qe(U,Uint8Array))k+U.length>E.length?(a.isBuffer(U)||(U=a.from(U)),U.copy(E,k)):Uint8Array.prototype.set.call(E,U,k);else if(a.isBuffer(U))U.copy(E,k);else throw new TypeError('"list" argument must be an Array of Buffers');k+=U.length}return E};function P(m,l){if(a.isBuffer(m))return m.length;if(ArrayBuffer.isView(m)||qe(m,ArrayBuffer))return m.byteLength;if(typeof m!="string")throw new TypeError('The "string" argument must be one of type string, Buffer, or ArrayBuffer. Received type '+typeof m);const c=m.length,g=arguments.length>2&&arguments[2]===!0;if(!g&&c===0)return 0;let E=!1;for(;;)switch(l){case"ascii":case"latin1":case"binary":return c;case"utf8":case"utf-8":return ge(m).length;case"ucs2":case"ucs-2":case"utf16le":case"utf-16le":return c*2;case"hex":return c>>>1;case"base64":return at(m).length;default:if(E)return g?-1:ge(m).length;l=(""+l).toLowerCase(),E=!0}}a.byteLength=P;function R(m,l,c){let g=!1;if((l===void 0||l<0)&&(l=0),l>this.length||((c===void 0||c>this.length)&&(c=this.length),c<=0)||(c>>>=0,l>>>=0,c<=l))return"";for(m||(m="utf8");;)switch(m){case"hex":return L(this,l,c);case"utf8":case"utf-8":return K(this,l,c);case"ascii":return Z(this,l,c);case"latin1":case"binary":return z(this,l,c);case"base64":return $(this,l,c);case"ucs2":case"ucs-2":case"utf16le":case"utf-16le":return oe(this,l,c);default:if(g)throw new TypeError("Unknown encoding: "+m);m=(m+"").toLowerCase(),g=!0}}a.prototype._isBuffer=!0;function O(m,l,c){const g=m[l];m[l]=m[c],m[c]=g}a.prototype.swap16=function(){const l=this.length;if(l%2!==0)throw new RangeError("Buffer size must be a multiple of 16-bits");for(let c=0;c<l;c+=2)O(this,c,c+1);return this},a.prototype.swap32=function(){const l=this.length;if(l%4!==0)throw new RangeError("Buffer size must be a multiple of 32-bits");for(let c=0;c<l;c+=4)O(this,c,c+3),O(this,c+1,c+2);return this},a.prototype.swap64=function(){const l=this.length;if(l%8!==0)throw new RangeError("Buffer size must be a multiple of 64-bits");for(let c=0;c<l;c+=8)O(this,c,c+7),O(this,c+1,c+6),O(this,c+2,c+5),O(this,c+3,c+4);return this},a.prototype.toString=function(){const l=this.length;return l===0?"":arguments.length===0?K(this,0,l):R.apply(this,arguments)},a.prototype.toLocaleString=a.prototype.toString,a.prototype.equals=function(l){if(!a.isBuffer(l))throw new TypeError("Argument must be a Buffer");return this===l?!0:a.compare(this,l)===0},a.prototype.inspect=function(){let l="";const c=r.INSPECT_MAX_BYTES;return l=this.toString("hex",0,c).replace(/(.{2})/g,"$1 ").trim(),this.length>c&&(l+=" ... "),"<Buffer "+l+">"},s&&(a.prototype[s]=a.prototype.inspect),a.prototype.compare=function(l,c,g,E,k){if(qe(l,Uint8Array)&&(l=a.from(l,l.offset,l.byteLength)),!a.isBuffer(l))throw new TypeError('The "target" argument must be one of type Buffer or Uint8Array. Received type '+typeof l);if(c===void 0&&(c=0),g===void 0&&(g=l?l.length:0),E===void 0&&(E=0),k===void 0&&(k=this.length),c<0||g>l.length||E<0||k>this.length)throw new RangeError("out of range index");if(E>=k&&c>=g)return 0;if(E>=k)return-1;if(c>=g)return 1;if(c>>>=0,g>>>=0,E>>>=0,k>>>=0,this===l)return 0;let U=k-E,re=g-c;const Te=Math.min(U,re),ye=this.slice(E,k),ke=l.slice(c,g);for(let me=0;me<Te;++me)if(ye[me]!==ke[me]){U=ye[me],re=ke[me];break}return U<re?-1:re<U?1:0};function G(m,l,c,g,E){if(m.length===0)return-1;if(typeof c=="string"?(g=c,c=0):c>2147483647?c=2147483647:c<-2147483648&&(c=-2147483648),c=+c,Pt(c)&&(c=E?0:m.length-1),c<0&&(c=m.length+c),c>=m.length){if(E)return-1;c=m.length-1}else if(c<0)if(E)c=0;else return-1;if(typeof l=="string"&&(l=a.from(l,g)),a.isBuffer(l))return l.length===0?-1:x(m,l,c,g,E);if(typeof l=="number")return l=l&255,typeof Uint8Array.prototype.indexOf=="function"?E?Uint8Array.prototype.indexOf.call(m,l,c):Uint8Array.prototype.lastIndexOf.call(m,l,c):x(m,[l],c,g,E);throw new TypeError("val must be string, number or Buffer")}function x(m,l,c,g,E){let k=1,U=m.length,re=l.length;if(g!==void 0&&(g=String(g).toLowerCase(),g==="ucs2"||g==="ucs-2"||g==="utf16le"||g==="utf-16le")){if(m.length<2||l.length<2)return-1;k=2,U/=2,re/=2,c/=2}function Te(ke,me){return k===1?ke[me]:ke.readUInt16BE(me*k)}let ye;if(E){let ke=-1;for(ye=c;ye<U;ye++)if(Te(m,ye)===Te(l,ke===-1?0:ye-ke)){if(ke===-1&&(ke=ye),ye-ke+1===re)return ke*k}else ke!==-1&&(ye-=ye-ke),ke=-1}else for(c+re>U&&(c=U-re),ye=c;ye>=0;ye--){let ke=!0;for(let me=0;me<re;me++)if(Te(m,ye+me)!==Te(l,me)){ke=!1;break}if(ke)return ye}return-1}a.prototype.includes=function(l,c,g){return this.indexOf(l,c,g)!==-1},a.prototype.indexOf=function(l,c,g){return G(this,l,c,g,!0)},a.prototype.lastIndexOf=function(l,c,g){return G(this,l,c,g,!1)};function N(m,l,c,g){c=Number(c)||0;const E=m.length-c;g?(g=Number(g),g>E&&(g=E)):g=E;const k=l.length;g>k/2&&(g=k/2);let U;for(U=0;U<g;++U){const re=parseInt(l.substr(U*2,2),16);if(Pt(re))return U;m[c+U]=re}return U}function I(m,l,c,g){return Ze(ge(l,m.length-c),m,c,g)}function te(m,l,c,g){return Ze($e(l),m,c,g)}function C(m,l,c,g){return Ze(at(l),m,c,g)}function B(m,l,c,g){return Ze(Et(l,m.length-c),m,c,g)}a.prototype.write=function(l,c,g,E){if(c===void 0)E="utf8",g=this.length,c=0;else if(g===void 0&&typeof c=="string")E=c,g=this.length,c=0;else if(isFinite(c))c=c>>>0,isFinite(g)?(g=g>>>0,E===void 0&&(E="utf8")):(E=g,g=void 0);else throw new Error("Buffer.write(string, encoding, offset[, length]) is no longer supported");const k=this.length-c;if((g===void 0||g>k)&&(g=k),l.length>0&&(g<0||c<0)||c>this.length)throw new RangeError("Attempt to write outside buffer bounds");E||(E="utf8");let U=!1;for(;;)switch(E){case"hex":return N(this,l,c,g);case"utf8":case"utf-8":return I(this,l,c,g);case"ascii":case"latin1":case"binary":return te(this,l,c,g);case"base64":return C(this,l,c,g);case"ucs2":case"ucs-2":case"utf16le":case"utf-16le":return B(this,l,c,g);default:if(U)throw new TypeError("Unknown encoding: "+E);E=(""+E).toLowerCase(),U=!0}},a.prototype.toJSON=function(){return{type:"Buffer",data:Array.prototype.slice.call(this._arr||this,0)}};function $(m,l,c){return l===0&&c===m.length?e.fromByteArray(m):e.fromByteArray(m.slice(l,c))}function K(m,l,c){c=Math.min(m.length,c);const g=[];let E=l;for(;E<c;){const k=m[E];let U=null,re=k>239?4:k>223?3:k>191?2:1;if(E+re<=c){let Te,ye,ke,me;switch(re){case 1:k<128&&(U=k);break;case 2:Te=m[E+1],(Te&192)===128&&(me=(k&31)<<6|Te&63,me>127&&(U=me));break;case 3:Te=m[E+1],ye=m[E+2],(Te&192)===128&&(ye&192)===128&&(me=(k&15)<<12|(Te&63)<<6|ye&63,me>2047&&(me<55296||me>57343)&&(U=me));break;case 4:Te=m[E+1],ye=m[E+2],ke=m[E+3],(Te&192)===128&&(ye&192)===128&&(ke&192)===128&&(me=(k&15)<<18|(Te&63)<<12|(ye&63)<<6|ke&63,me>65535&&me<1114112&&(U=me))}}U===null?(U=65533,re=1):U>65535&&(U-=65536,g.push(U>>>10&1023|55296),U=56320|U&1023),g.push(U),E+=re}return X(g)}const W=4096;function X(m){const l=m.length;if(l<=W)return String.fromCharCode.apply(String,m);let c="",g=0;for(;g<l;)c+=String.fromCharCode.apply(String,m.slice(g,g+=W));return c}function Z(m,l,c){let g="";c=Math.min(m.length,c);for(let E=l;E<c;++E)g+=String.fromCharCode(m[E]&127);return g}function z(m,l,c){let g="";c=Math.min(m.length,c);for(let E=l;E<c;++E)g+=String.fromCharCode(m[E]);return g}function L(m,l,c){const g=m.length;(!l||l<0)&&(l=0),(!c||c<0||c>g)&&(c=g);let E="";for(let k=l;k<c;++k)E+=xt[m[k]];return E}function oe(m,l,c){const g=m.slice(l,c);let E="";for(let k=0;k<g.length-1;k+=2)E+=String.fromCharCode(g[k]+g[k+1]*256);return E}a.prototype.slice=function(l,c){const g=this.length;l=~~l,c=c===void 0?g:~~c,l<0?(l+=g,l<0&&(l=0)):l>g&&(l=g),c<0?(c+=g,c<0&&(c=0)):c>g&&(c=g),c<l&&(c=l);const E=this.subarray(l,c);return Object.setPrototypeOf(E,a.prototype),E};function V(m,l,c){if(m%1!==0||m<0)throw new RangeError("offset is not uint");if(m+l>c)throw new RangeError("Trying to access beyond buffer length")}a.prototype.readUintLE=a.prototype.readUIntLE=function(l,c,g){l=l>>>0,c=c>>>0,g||V(l,c,this.length);let E=this[l],k=1,U=0;for(;++U<c&&(k*=256);)E+=this[l+U]*k;return E},a.prototype.readUintBE=a.prototype.readUIntBE=function(l,c,g){l=l>>>0,c=c>>>0,g||V(l,c,this.length);let E=this[l+--c],k=1;for(;c>0&&(k*=256);)E+=this[l+--c]*k;return E},a.prototype.readUint8=a.prototype.readUInt8=function(l,c){return l=l>>>0,c||V(l,1,this.length),this[l]},a.prototype.readUint16LE=a.prototype.readUInt16LE=function(l,c){return l=l>>>0,c||V(l,2,this.length),this[l]|this[l+1]<<8},a.prototype.readUint16BE=a.prototype.readUInt16BE=function(l,c){return l=l>>>0,c||V(l,2,this.length),this[l]<<8|this[l+1]},a.prototype.readUint32LE=a.prototype.readUInt32LE=function(l,c){return l=l>>>0,c||V(l,4,this.length),(this[l]|this[l+1]<<8|this[l+2]<<16)+this[l+3]*16777216},a.prototype.readUint32BE=a.prototype.readUInt32BE=function(l,c){return l=l>>>0,c||V(l,4,this.length),this[l]*16777216+(this[l+1]<<16|this[l+2]<<8|this[l+3])},a.prototype.readBigUInt64LE=pt(function(l){l=l>>>0,Re(l,"offset");const c=this[l],g=this[l+7];(c===void 0||g===void 0)&&Ce(l,this.length-8);const E=c+this[++l]*2**8+this[++l]*2**16+this[++l]*2**24,k=this[++l]+this[++l]*2**8+this[++l]*2**16+g*2**24;return BigInt(E)+(BigInt(k)<<BigInt(32))}),a.prototype.readBigUInt64BE=pt(function(l){l=l>>>0,Re(l,"offset");const c=this[l],g=this[l+7];(c===void 0||g===void 0)&&Ce(l,this.length-8);const E=c*2**24+this[++l]*2**16+this[++l]*2**8+this[++l],k=this[++l]*2**24+this[++l]*2**16+this[++l]*2**8+g;return(BigInt(E)<<BigInt(32))+BigInt(k)}),a.prototype.readIntLE=function(l,c,g){l=l>>>0,c=c>>>0,g||V(l,c,this.length);let E=this[l],k=1,U=0;for(;++U<c&&(k*=256);)E+=this[l+U]*k;return k*=128,E>=k&&(E-=Math.pow(2,8*c)),E},a.prototype.readIntBE=function(l,c,g){l=l>>>0,c=c>>>0,g||V(l,c,this.length);let E=c,k=1,U=this[l+--E];for(;E>0&&(k*=256);)U+=this[l+--E]*k;return k*=128,U>=k&&(U-=Math.pow(2,8*c)),U},a.prototype.readInt8=function(l,c){return l=l>>>0,c||V(l,1,this.length),this[l]&128?(255-this[l]+1)*-1:this[l]},a.prototype.readInt16LE=function(l,c){l=l>>>0,c||V(l,2,this.length);const g=this[l]|this[l+1]<<8;return g&32768?g|4294901760:g},a.prototype.readInt16BE=function(l,c){l=l>>>0,c||V(l,2,this.length);const g=this[l+1]|this[l]<<8;return g&32768?g|4294901760:g},a.prototype.readInt32LE=function(l,c){return l=l>>>0,c||V(l,4,this.length),this[l]|this[l+1]<<8|this[l+2]<<16|this[l+3]<<24},a.prototype.readInt32BE=function(l,c){return l=l>>>0,c||V(l,4,this.length),this[l]<<24|this[l+1]<<16|this[l+2]<<8|this[l+3]},a.prototype.readBigInt64LE=pt(function(l){l=l>>>0,Re(l,"offset");const c=this[l],g=this[l+7];(c===void 0||g===void 0)&&Ce(l,this.length-8);const E=this[l+4]+this[l+5]*2**8+this[l+6]*2**16+(g<<24);return(BigInt(E)<<BigInt(32))+BigInt(c+this[++l]*2**8+this[++l]*2**16+this[++l]*2**24)}),a.prototype.readBigInt64BE=pt(function(l){l=l>>>0,Re(l,"offset");const c=this[l],g=this[l+7];(c===void 0||g===void 0)&&Ce(l,this.length-8);const E=(c<<24)+this[++l]*2**16+this[++l]*2**8+this[++l];return(BigInt(E)<<BigInt(32))+BigInt(this[++l]*2**24+this[++l]*2**16+this[++l]*2**8+g)}),a.prototype.readFloatLE=function(l,c){return l=l>>>0,c||V(l,4,this.length),t.read(this,l,!0,23,4)},a.prototype.readFloatBE=function(l,c){return l=l>>>0,c||V(l,4,this.length),t.read(this,l,!1,23,4)},a.prototype.readDoubleLE=function(l,c){return l=l>>>0,c||V(l,8,this.length),t.read(this,l,!0,52,8)},a.prototype.readDoubleBE=function(l,c){return l=l>>>0,c||V(l,8,this.length),t.read(this,l,!1,52,8)};function Y(m,l,c,g,E,k){if(!a.isBuffer(m))throw new TypeError('"buffer" argument must be a Buffer instance');if(l>E||l<k)throw new RangeError('"value" argument is out of bounds');if(c+g>m.length)throw new RangeError("Index out of range")}a.prototype.writeUintLE=a.prototype.writeUIntLE=function(l,c,g,E){if(l=+l,c=c>>>0,g=g>>>0,!E){const re=Math.pow(2,8*g)-1;Y(this,l,c,g,re,0)}let k=1,U=0;for(this[c]=l&255;++U<g&&(k*=256);)this[c+U]=l/k&255;return c+g},a.prototype.writeUintBE=a.prototype.writeUIntBE=function(l,c,g,E){if(l=+l,c=c>>>0,g=g>>>0,!E){const re=Math.pow(2,8*g)-1;Y(this,l,c,g,re,0)}let k=g-1,U=1;for(this[c+k]=l&255;--k>=0&&(U*=256);)this[c+k]=l/U&255;return c+g},a.prototype.writeUint8=a.prototype.writeUInt8=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,1,255,0),this[c]=l&255,c+1},a.prototype.writeUint16LE=a.prototype.writeUInt16LE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,2,65535,0),this[c]=l&255,this[c+1]=l>>>8,c+2},a.prototype.writeUint16BE=a.prototype.writeUInt16BE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,2,65535,0),this[c]=l>>>8,this[c+1]=l&255,c+2},a.prototype.writeUint32LE=a.prototype.writeUInt32LE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,4,4294967295,0),this[c+3]=l>>>24,this[c+2]=l>>>16,this[c+1]=l>>>8,this[c]=l&255,c+4},a.prototype.writeUint32BE=a.prototype.writeUInt32BE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,4,4294967295,0),this[c]=l>>>24,this[c+1]=l>>>16,this[c+2]=l>>>8,this[c+3]=l&255,c+4};function le(m,l,c,g,E){Ee(l,g,E,m,c,7);let k=Number(l&BigInt(4294967295));m[c++]=k,k=k>>8,m[c++]=k,k=k>>8,m[c++]=k,k=k>>8,m[c++]=k;let U=Number(l>>BigInt(32)&BigInt(4294967295));return m[c++]=U,U=U>>8,m[c++]=U,U=U>>8,m[c++]=U,U=U>>8,m[c++]=U,c}function be(m,l,c,g,E){Ee(l,g,E,m,c,7);let k=Number(l&BigInt(4294967295));m[c+7]=k,k=k>>8,m[c+6]=k,k=k>>8,m[c+5]=k,k=k>>8,m[c+4]=k;let U=Number(l>>BigInt(32)&BigInt(4294967295));return m[c+3]=U,U=U>>8,m[c+2]=U,U=U>>8,m[c+1]=U,U=U>>8,m[c]=U,c+8}a.prototype.writeBigUInt64LE=pt(function(l,c=0){return le(this,l,c,BigInt(0),BigInt("0xffffffffffffffff"))}),a.prototype.writeBigUInt64BE=pt(function(l,c=0){return be(this,l,c,BigInt(0),BigInt("0xffffffffffffffff"))}),a.prototype.writeIntLE=function(l,c,g,E){if(l=+l,c=c>>>0,!E){const Te=Math.pow(2,8*g-1);Y(this,l,c,g,Te-1,-Te)}let k=0,U=1,re=0;for(this[c]=l&255;++k<g&&(U*=256);)l<0&&re===0&&this[c+k-1]!==0&&(re=1),this[c+k]=(l/U>>0)-re&255;return c+g},a.prototype.writeIntBE=function(l,c,g,E){if(l=+l,c=c>>>0,!E){const Te=Math.pow(2,8*g-1);Y(this,l,c,g,Te-1,-Te)}let k=g-1,U=1,re=0;for(this[c+k]=l&255;--k>=0&&(U*=256);)l<0&&re===0&&this[c+k+1]!==0&&(re=1),this[c+k]=(l/U>>0)-re&255;return c+g},a.prototype.writeInt8=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,1,127,-128),l<0&&(l=255+l+1),this[c]=l&255,c+1},a.prototype.writeInt16LE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,2,32767,-32768),this[c]=l&255,this[c+1]=l>>>8,c+2},a.prototype.writeInt16BE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,2,32767,-32768),this[c]=l>>>8,this[c+1]=l&255,c+2},a.prototype.writeInt32LE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,4,2147483647,-2147483648),this[c]=l&255,this[c+1]=l>>>8,this[c+2]=l>>>16,this[c+3]=l>>>24,c+4},a.prototype.writeInt32BE=function(l,c,g){return l=+l,c=c>>>0,g||Y(this,l,c,4,2147483647,-2147483648),l<0&&(l=4294967295+l+1),this[c]=l>>>24,this[c+1]=l>>>16,this[c+2]=l>>>8,this[c+3]=l&255,c+4},a.prototype.writeBigInt64LE=pt(function(l,c=0){return le(this,l,c,-BigInt("0x8000000000000000"),BigInt("0x7fffffffffffffff"))}),a.prototype.writeBigInt64BE=pt(function(l,c=0){return be(this,l,c,-BigInt("0x8000000000000000"),BigInt("0x7fffffffffffffff"))});function _e(m,l,c,g,E,k){if(c+g>m.length)throw new RangeError("Index out of range");if(c<0)throw new RangeError("Index out of range")}function Le(m,l,c,g,E){return l=+l,c=c>>>0,E||_e(m,l,c,4),t.write(m,l,c,g,23,4),c+4}a.prototype.writeFloatLE=function(l,c,g){return Le(this,l,c,!0,g)},a.prototype.writeFloatBE=function(l,c,g){return Le(this,l,c,!1,g)};function j(m,l,c,g,E){return l=+l,c=c>>>0,E||_e(m,l,c,8),t.write(m,l,c,g,52,8),c+8}a.prototype.writeDoubleLE=function(l,c,g){return j(this,l,c,!0,g)},a.prototype.writeDoubleBE=function(l,c,g){return j(this,l,c,!1,g)},a.prototype.copy=function(l,c,g,E){if(!a.isBuffer(l))throw new TypeError("argument should be a Buffer");if(g||(g=0),!E&&E!==0&&(E=this.length),c>=l.length&&(c=l.length),c||(c=0),E>0&&E<g&&(E=g),E===g||l.length===0||this.length===0)return 0;if(c<0)throw new RangeError("targetStart out of bounds");if(g<0||g>=this.length)throw new RangeError("Index out of range");if(E<0)throw new RangeError("sourceEnd out of bounds");E>this.length&&(E=this.length),l.length-c<E-g&&(E=l.length-c+g);const k=E-g;return this===l&&typeof Uint8Array.prototype.copyWithin=="function"?this.copyWithin(c,g,E):Uint8Array.prototype.set.call(l,this.subarray(g,E),c),k},a.prototype.fill=function(l,c,g,E){if(typeof l=="string"){if(typeof c=="string"?(E=c,c=0,g=this.length):typeof g=="string"&&(E=g,g=this.length),E!==void 0&&typeof E!="string")throw new TypeError("encoding must be a string");if(typeof E=="string"&&!a.isEncoding(E))throw new TypeError("Unknown encoding: "+E);if(l.length===1){const U=l.charCodeAt(0);(E==="utf8"&&U<128||E==="latin1")&&(l=U)}}else typeof l=="number"?l=l&255:typeof l=="boolean"&&(l=Number(l));if(c<0||this.length<c||this.length<g)throw new RangeError("Out of range index");if(g<=c)return this;c=c>>>0,g=g===void 0?this.length:g>>>0,l||(l=0);let k;if(typeof l=="number")for(k=c;k<g;++k)this[k]=l;else{const U=a.isBuffer(l)?l:a.from(l,E),re=U.length;if(re===0)throw new TypeError('The value "'+l+'" is invalid for argument "value"');for(k=0;k<g-c;++k)this[k+c]=U[k%re]}return this};const pe={};function se(m,l,c){pe[m]=class extends c{constructor(){super(),Object.defineProperty(this,"message",{value:l.apply(this,arguments),writable:!0,configurable:!0}),this.name=`${this.name} [${m}]`,this.stack,delete this.name}get code(){return m}set code(E){Object.defineProperty(this,"code",{configurable:!0,enumerable:!0,value:E,writable:!0})}toString(){return`${this.name} [${m}]: ${this.message}`}}}se("ERR_BUFFER_OUT_OF_BOUNDS",function(m){return m?`${m} is outside of buffer bounds`:"Attempt to access memory outside buffer bounds"},RangeError),se("ERR_INVALID_ARG_TYPE",function(m,l){return`The "${m}" argument must be of type number. Received type ${typeof l}`},TypeError),se("ERR_OUT_OF_RANGE",function(m,l,c){let g=`The value of "${m}" is out of range.`,E=c;return Number.isInteger(c)&&Math.abs(c)>2**32?E=ae(String(c)):typeof c=="bigint"&&(E=String(c),(c>BigInt(2)**BigInt(32)||c<-(BigInt(2)**BigInt(32)))&&(E=ae(E)),E+="n"),g+=` It must be ${l}. Received ${E}`,g},RangeError);function ae(m){let l="",c=m.length;const g=m[0]==="-"?1:0;for(;c>=g+4;c-=3)l=`_${m.slice(c-3,c)}${l}`;return`${m.slice(0,c)}${l}`}function he(m,l,c){Re(l,"offset"),(m[l]===void 0||m[l+c]===void 0)&&Ce(l,m.length-(c+1))}function Ee(m,l,c,g,E,k){if(m>c||m<l){const U=typeof l=="bigint"?"n":"";let re;throw l===0||l===BigInt(0)?re=`>= 0${U} and < 2${U} ** ${(k+1)*8}${U}`:re=`>= -(2${U} ** ${(k+1)*8-1}${U}) and < 2 ** ${(k+1)*8-1}${U}`,new pe.ERR_OUT_OF_RANGE("value",re,m)}he(g,E,k)}function Re(m,l){if(typeof m!="number")throw new pe.ERR_INVALID_ARG_TYPE(l,"number",m)}function Ce(m,l,c){throw Math.floor(m)!==m?(Re(m,c),new pe.ERR_OUT_OF_RANGE("offset","an integer",m)):l<0?new pe.ERR_BUFFER_OUT_OF_BOUNDS:new pe.ERR_OUT_OF_RANGE("offset",`>= 0 and <= ${l}`,m)}const Be=/[^+/0-9A-Za-z-_]/g;function Ke(m){if(m=m.split("=")[0],m=m.trim().replace(Be,""),m.length<2)return"";for(;m.length%4!==0;)m=m+"=";return m}function ge(m,l){l=l||1/0;let c;const g=m.length;let E=null;const k=[];for(let U=0;U<g;++U){if(c=m.charCodeAt(U),c>55295&&c<57344){if(!E){if(c>56319){(l-=3)>-1&&k.push(239,191,189);continue}else if(U+1===g){(l-=3)>-1&&k.push(239,191,189);continue}E=c;continue}if(c<56320){(l-=3)>-1&&k.push(239,191,189),E=c;continue}c=(E-55296<<10|c-56320)+65536}else E&&(l-=3)>-1&&k.push(239,191,189);if(E=null,c<128){if((l-=1)<0)break;k.push(c)}else if(c<2048){if((l-=2)<0)break;k.push(c>>6|192,c&63|128)}else if(c<65536){if((l-=3)<0)break;k.push(c>>12|224,c>>6&63|128,c&63|128)}else if(c<1114112){if((l-=4)<0)break;k.push(c>>18|240,c>>12&63|128,c>>6&63|128,c&63|128)}else throw new Error("Invalid code point")}return k}function $e(m){const l=[];for(let c=0;c<m.length;++c)l.push(m.charCodeAt(c)&255);return l}function Et(m,l){let c,g,E;const k=[];for(let U=0;U<m.length&&!((l-=2)<0);++U)c=m.charCodeAt(U),g=c>>8,E=c%256,k.push(E),k.push(g);return k}function at(m){return e.toByteArray(Ke(m))}function Ze(m,l,c,g){let E;for(E=0;E<g&&!(E+c>=l.length||E>=m.length);++E)l[E+c]=m[E];return E}function qe(m,l){return m instanceof l||m!=null&&m.constructor!=null&&m.constructor.name!=null&&m.constructor.name===l.name}function Pt(m){return m!==m}const xt=function(){const m="0123456789abcdef",l=new Array(256);for(let c=0;c<16;++c){const g=c*16;for(let E=0;E<16;++E)l[g+E]=m[c]+m[E]}return l}();function pt(m){return typeof BigInt>"u"?Lt:m}function Lt(){throw new Error("BigInt not supported")}})(Yr);function ei(){return typeof navigator=="object"&&"userAgent"in navigator?navigator.userAgent:typeof process=="object"&&process.version!==void 0?`Node.js/${process.version.substr(1)} (${process.platform}; ${process.arch})`:"<environment undetectable>"}function Ko(r,e,t,s){if(typeof t!="function")throw new Error("method for before hook must be a function");return s||(s={}),Array.isArray(e)?e.reverse().reduce((i,o)=>Ko.bind(null,r,o,i,s),t)():Promise.resolve().then(()=>r.registry[e]?r.registry[e].reduce((i,o)=>o.hook.bind(null,i,s),t)():t(s))}function du(r,e,t,s){const i=s;r.registry[t]||(r.registry[t]=[]),e==="before"&&(s=(o,n)=>Promise.resolve().then(i.bind(null,n)).then(o.bind(null,n))),e==="after"&&(s=(o,n)=>{let a;return Promise.resolve().then(o.bind(null,n)).then(u=>(a=u,i(a,n))).then(()=>a)}),e==="error"&&(s=(o,n)=>Promise.resolve().then(o.bind(null,n)).catch(a=>i(a,n))),r.registry[t].push({hook:s,orig:i})}function mu(r,e,t){if(!r.registry[e])return;const s=r.registry[e].map(i=>i.orig).indexOf(t);s!==-1&&r.registry[e].splice(s,1)}const so=Function.bind,io=so.bind(so);function fu(r,e,t){const s=io(mu,null).apply(null,[e]);r.api={remove:s},r.remove=s,["before","error","after","wrap"].forEach(i=>{const o=[e,i];r[i]=r.api[i]=io(du,null).apply(null,o)})}function gu(){const r={registry:{}},e=Ko.bind(null,r);return fu(e,r),e}const yu={Collection:gu};var wu="0.0.0-development",bu=`octokit-endpoint.js/${wu} ${ei()}`,_u={method:"GET",baseUrl:"https://api.github.com",headers:{accept:"application/vnd.github.v3+json","user-agent":bu},mediaType:{format:""}};function Eu(r){return r?Object.keys(r).reduce((e,t)=>(e[t.toLowerCase()]=r[t],e),{}):{}}function Tu(r){if(typeof r!="object"||r===null||Object.prototype.toString.call(r)!=="[object Object]")return!1;const e=Object.getPrototypeOf(r);if(e===null)return!0;const t=Object.prototype.hasOwnProperty.call(e,"constructor")&&e.constructor;return typeof t=="function"&&t instanceof t&&Function.prototype.call(t)===Function.prototype.call(r)}function Xo(r,e){const t=Object.assign({},r);return Object.keys(e).forEach(s=>{Tu(e[s])?s in r?t[s]=Xo(r[s],e[s]):Object.assign(t,{[s]:e[s]}):Object.assign(t,{[s]:e[s]})}),t}function no(r){for(const e in r)r[e]===void 0&&delete r[e];return r}function $i(r,e,t){var i;if(typeof e=="string"){let[o,n]=e.split(" ");t=Object.assign(n?{method:o,url:n}:{url:o},t)}else t=Object.assign({},e);t.headers=Eu(t.headers),no(t),no(t.headers);const s=Xo(r||{},t);return t.url==="/graphql"&&(r&&((i=r.mediaType.previews)!=null&&i.length)&&(s.mediaType.previews=r.mediaType.previews.filter(o=>!s.mediaType.previews.includes(o)).concat(s.mediaType.previews)),s.mediaType.previews=(s.mediaType.previews||[]).map(o=>o.replace(/-preview/,""))),s}function vu(r,e){const t=/\?/.test(r)?"&":"?",s=Object.keys(e);return s.length===0?r:r+t+s.map(i=>i==="q"?"q="+e.q.split("+").map(encodeURIComponent).join("+"):`${i}=${encodeURIComponent(e[i])}`).join("&")}var Cu=/\{[^{}}]+\}/g;function ku(r){return r.replace(new RegExp("(?:^\\W+)|(?:(?<!\\W)\\W+$)","g"),"").split(/,/)}function Su(r){const e=r.match(Cu);return e?e.map(ku).reduce((t,s)=>t.concat(s),[]):[]}function oo(r,e){const t={__proto__:null};for(const s of Object.keys(r))e.indexOf(s)===-1&&(t[s]=r[s]);return t}function Qo(r){return r.split(/(%[0-9A-Fa-f]{2})/g).map(function(e){return/%[0-9A-Fa-f]/.test(e)||(e=encodeURI(e).replace(/%5B/g,"[").replace(/%5D/g,"]")),e}).join("")}function Hr(r){return encodeURIComponent(r).replace(/[!'()*]/g,function(e){return"%"+e.charCodeAt(0).toString(16).toUpperCase()})}function Zr(r,e,t){return e=r==="+"||r==="#"?Qo(e):Hr(e),t?Hr(t)+"="+e:e}function Lr(r){return r!=null}function Ci(r){return r===";"||r==="&"||r==="?"}function Fu(r,e,t,s){var i=r[t],o=[];if(Lr(i)&&i!=="")if(typeof i=="string"||typeof i=="number"||typeof i=="boolean")i=i.toString(),s&&s!=="*"&&(i=i.substring(0,parseInt(s,10))),o.push(Zr(e,i,Ci(e)?t:""));else if(s==="*")Array.isArray(i)?i.filter(Lr).forEach(function(n){o.push(Zr(e,n,Ci(e)?t:""))}):Object.keys(i).forEach(function(n){Lr(i[n])&&o.push(Zr(e,i[n],n))});else{const n=[];Array.isArray(i)?i.filter(Lr).forEach(function(a){n.push(Zr(e,a))}):Object.keys(i).forEach(function(a){Lr(i[a])&&(n.push(Hr(a)),n.push(Zr(e,i[a].toString())))}),Ci(e)?o.push(Hr(t)+"="+n.join(",")):n.length!==0&&o.push(n.join(","))}else e===";"?Lr(i)&&o.push(Hr(t)):i===""&&(e==="&"||e==="?")?o.push(Hr(t)+"="):i===""&&o.push("");return o}function Pu(r){return{expand:Au.bind(null,r)}}function Au(r,e){var t=["+","#",".","/",";","?","&"];return r=r.replace(/\{([^\{\}]+)\}|([^\{\}]+)/g,function(s,i,o){if(i){let a="";const u=[];if(t.indexOf(i.charAt(0))!==-1&&(a=i.charAt(0),i=i.substr(1)),i.split(/,/g).forEach(function(h){var p=/([^:\*]*)(?::(\d+)|(\*))?/.exec(h);u.push(Fu(e,a,p[1],p[2]||p[3]))}),a&&a!=="+"){var n=",";return a==="?"?n="&":a!=="#"&&(n=a),(u.length!==0?a:"")+u.join(n)}else return u.join(",")}else return Qo(o)}),r==="/"?r:r.replace(/\/$/,"")}function Jo(r){var p;let e=r.method.toUpperCase(),t=(r.url||"/").replace(/:([a-z]\w+)/g,"{$1}"),s=Object.assign({},r.headers),i,o=oo(r,["method","baseUrl","url","headers","request","mediaType"]);const n=Su(t);t=Pu(t).expand(o),/^http/.test(t)||(t=r.baseUrl+t);const a=Object.keys(r).filter(d=>n.includes(d)).concat("baseUrl"),u=oo(o,a);if(!/application\/octet-stream/i.test(s.accept)&&(r.mediaType.format&&(s.accept=s.accept.split(/,/).map(d=>d.replace(/application\/vnd(\.\w+)(\.v3)?(\.\w+)?(\+json)?$/,`application/vnd$1$2.${r.mediaType.format}`)).join(",")),t.endsWith("/graphql")&&(p=r.mediaType.previews)!=null&&p.length)){const d=s.accept.match(new RegExp("(?<![\\w-])[\\w-]+(?=-preview)","g"))||[];s.accept=d.concat(r.mediaType.previews).map(f=>{const y=r.mediaType.format?`.${r.mediaType.format}`:"+json";return`application/vnd.github.${f}-preview${y}`}).join(",")}return["GET","HEAD"].includes(e)?t=vu(t,u):"data"in u?i=u.data:Object.keys(u).length&&(i=u),!s["content-type"]&&typeof i<"u"&&(s["content-type"]="application/json; charset=utf-8"),["PATCH","PUT"].includes(e)&&typeof i>"u"&&(i=""),Object.assign({method:e,url:t,headers:s},typeof i<"u"?{body:i}:null,r.request?{request:r.request}:null)}function Ou(r,e,t){return Jo($i(r,e,t))}function Zo(r,e){const t=$i(r,e),s=Ou.bind(null,t);return Object.assign(s,{DEFAULTS:t,defaults:Zo.bind(null,t),merge:$i.bind(null,t),parse:Jo})}var Ru=Zo(null,_u);const hn=function(){};hn.prototype=Object.create(null);const ao=/; *([!#$%&'*+.^\w`|~-]+)=("(?:[\v\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\v\u0020-\u00ff])*"|[!#$%&'*+.^\w`|~-]+) */gu,lo=/\\([\v\u0020-\u00ff])/gu,Du=/^[!#$%&'*+.^\w|~-]+\/[!#$%&'*+.^\w|~-]+$/u,qr={type:"",parameters:new hn};Object.freeze(qr.parameters);Object.freeze(qr);function Gu(r){if(typeof r!="string")return qr;let e=r.indexOf(";");const t=e!==-1?r.slice(0,e).trim():r.trim();if(Du.test(t)===!1)return qr;const s={type:t.toLowerCase(),parameters:new hn};if(e===-1)return s;let i,o,n;for(ao.lastIndex=e;o=ao.exec(r);){if(o.index!==e)return qr;e+=o[0].length,i=o[1].toLowerCase(),n=o[2],n[0]==='"'&&(n=n.slice(1,n.length-1),lo.test(n)&&(n=n.replace(lo,"$1"))),s.parameters[i]=n}return e!==r.length?qr:s}var Uu=Gu;class As extends Error{constructor(t,s,i){super(t);H(this,"name");H(this,"status");H(this,"request");H(this,"response");this.name="HttpError",this.status=Number.parseInt(s),Number.isNaN(this.status)&&(this.status=0),"response"in i&&(this.response=i.response);const o=Object.assign({},i.request);i.request.headers.authorization&&(o.headers=Object.assign({},i.request.headers,{authorization:i.request.headers.authorization.replace(new RegExp("(?<! ) .*$")," [REDACTED]")})),o.url=o.url.replace(/\bclient_secret=\w+/g,"client_secret=[REDACTED]").replace(/\baccess_token=\w+/g,"access_token=[REDACTED]"),this.request=o}}var Iu="9.2.4",xu={headers:{"user-agent":`octokit-request.js/${Iu} ${ei()}`}};function Lu(r){if(typeof r!="object"||r===null||Object.prototype.toString.call(r)!=="[object Object]")return!1;const e=Object.getPrototypeOf(r);if(e===null)return!0;const t=Object.prototype.hasOwnProperty.call(e,"constructor")&&e.constructor;return typeof t=="function"&&t instanceof t&&Function.prototype.call(t)===Function.prototype.call(r)}async function co(r){var d,f,y,w,v;const e=((d=r.request)==null?void 0:d.fetch)||globalThis.fetch;if(!e)throw new Error("fetch is not set. Please pass a fetch implementation as new Octokit({ request: { fetch }}). Learn more at https://github.com/octokit/octokit.js/#fetch-missing");const t=((f=r.request)==null?void 0:f.log)||console,s=((y=r.request)==null?void 0:y.parseSuccessResponseBody)!==!1,i=Lu(r.body)||Array.isArray(r.body)?JSON.stringify(r.body):r.body,o=Object.fromEntries(Object.entries(r.headers).map(([_,F])=>[_,String(F)]));let n;try{n=await e(r.url,{method:r.method,body:i,redirect:(w=r.request)==null?void 0:w.redirect,headers:o,signal:(v=r.request)==null?void 0:v.signal,...r.body&&{duplex:"half"}})}catch(_){let F="Unknown Error";if(_ instanceof Error){if(_.name==="AbortError")throw _.status=500,_;F=_.message,_.name==="TypeError"&&"cause"in _&&(_.cause instanceof Error?F=_.cause.message:typeof _.cause=="string"&&(F=_.cause))}const A=new As(F,500,{request:r});throw A.cause=_,A}const a=n.status,u=n.url,h={};for(const[_,F]of n.headers)h[_]=F;const p={url:u,status:a,headers:h,data:""};if("deprecation"in h){const _=h.link&&h.link.match(/<([^<>]+)>; rel="deprecation"/),F=_&&_.pop();t.warn(`[@octokit/request] "${r.method} ${r.url}" is deprecated. It is scheduled to be removed on ${h.sunset}${F?`. See ${F}`:""}`)}if(a===204||a===205)return p;if(r.method==="HEAD"){if(a<400)return p;throw new As(n.statusText,a,{response:p,request:r})}if(a===304)throw p.data=await ki(n),new As("Not modified",a,{response:p,request:r});if(a>=400)throw p.data=await ki(n),new As(Mu(p.data),a,{response:p,request:r});return p.data=s?await ki(n):n.body,p}async function ki(r){var s;const e=r.headers.get("content-type");if(!e)return r.text().catch(()=>"");const t=Uu(e);if(Bu(t)){let i="";try{return i=await r.text(),JSON.parse(i)}catch{return i}}else return t.type.startsWith("text/")||((s=t.parameters.charset)==null?void 0:s.toLowerCase())==="utf-8"?r.text().catch(()=>""):r.arrayBuffer().catch(()=>new ArrayBuffer(0))}function Bu(r){return r.type==="application/json"||r.type==="application/scim+json"}function Mu(r){if(typeof r=="string")return r;if(r instanceof ArrayBuffer)return"Unknown error";if("message"in r){const e="documentation_url"in r?` - ${r.documentation_url}`:"";return Array.isArray(r.errors)?`${r.message}: ${r.errors.map(t=>JSON.stringify(t)).join(", ")}${e}`:`${r.message}${e}`}return`Unknown error: ${JSON.stringify(r)}`}function zi(r,e){const t=r.defaults(e);return Object.assign(function(i,o){const n=t.merge(i,o);if(!n.request||!n.request.hook)return co(t.parse(n));const a=(u,h)=>co(t.parse(t.merge(u,h)));return Object.assign(a,{endpoint:t,defaults:zi.bind(null,t)}),n.request.hook(a,n)},{endpoint:t,defaults:zi.bind(null,t)})}var Hi=zi(Ru,xu),Nu="0.0.0-development";function ju(r){return`Request failed due to following response errors:
-`+r.errors.map(e=>` - ${e.message}`).join(`
-`)}var $u=class extends Error{constructor(e,t,s){super(ju(s));H(this,"name","GraphqlResponseError");H(this,"errors");H(this,"data");this.request=e,this.headers=t,this.response=s,this.errors=s.errors,this.data=s.data,Error.captureStackTrace&&Error.captureStackTrace(this,this.constructor)}},zu=["method","baseUrl","url","headers","request","query","mediaType","operationName"],Hu=["query","method","url"],uo=/\/api\/v3\/?$/;function qu(r,e,t){if(t){if(typeof e=="string"&&"query"in t)return Promise.reject(new Error('[@octokit/graphql] "query" cannot be used as variable name'));for(const n in t)if(Hu.includes(n))return Promise.reject(new Error(`[@octokit/graphql] "${n}" cannot be used as variable name`))}const s=typeof e=="string"?Object.assign({query:e},t):e,i=Object.keys(s).reduce((n,a)=>zu.includes(a)?(n[a]=s[a],n):(n.variables||(n.variables={}),n.variables[a]=s[a],n),{}),o=s.baseUrl||r.endpoint.DEFAULTS.baseUrl;return uo.test(o)&&(i.url=o.replace(uo,"/api/graphql")),r(i).then(n=>{if(n.data.errors){const a={};for(const u of Object.keys(n.headers))a[u]=n.headers[u];throw new $u(i,a,n.data)}return n.data.data})}function pn(r,e){const t=r.defaults(e);return Object.assign((i,o)=>qu(t,i,o),{defaults:pn.bind(null,t),endpoint:t.endpoint})}pn(Hi,{headers:{"user-agent":`octokit-graphql.js/${Nu} ${ei()}`},method:"POST",url:"/graphql"});function Wu(r){return pn(r,{method:"POST",url:"/graphql"})}var Si="(?:[a-zA-Z0-9_-]+)",ho="\\.",po=new RegExp(`^${Si}${ho}${Si}${ho}${Si}$`),Vu=po.test.bind(po);async function Yu(r){const e=Vu(r),t=r.startsWith("v1.")||r.startsWith("ghs_"),s=r.startsWith("ghu_");return{type:"token",token:r,tokenType:e?"app":t?"installation":s?"user-to-server":"oauth"}}function Ku(r){return r.split(/\./).length===3?`bearer ${r}`:`token ${r}`}async function Xu(r,e,t,s){const i=e.endpoint.merge(t,s);return i.headers.authorization=Ku(r),e(i)}var Qu=function(e){if(!e)throw new Error("[@octokit/auth-token] No token passed to createTokenAuth");if(typeof e!="string")throw new Error("[@octokit/auth-token] Token passed to createTokenAuth is not a string");return e=e.replace(/^(token|bearer) +/i,""),Object.assign(Yu.bind(null,e),{hook:Xu.bind(null,e)})};const ea="6.1.6",mo=()=>{},Ju=console.warn.bind(console),Zu=console.error.bind(console);function eh(r={}){return typeof r.debug!="function"&&(r.debug=mo),typeof r.info!="function"&&(r.info=mo),typeof r.warn!="function"&&(r.warn=Ju),typeof r.error!="function"&&(r.error=Zu),r}const fo=`octokit-core.js/${ea} ${ei()}`;var Rs;let th=(Rs=class{constructor(e={}){H(this,"request");H(this,"graphql");H(this,"log");H(this,"hook");H(this,"auth");const t=new yu.Collection,s={baseUrl:Hi.endpoint.DEFAULTS.baseUrl,headers:{},request:Object.assign({},e.request,{hook:t.bind(null,"request")}),mediaType:{previews:[],format:""}};if(s.headers["user-agent"]=e.userAgent?`${e.userAgent} ${fo}`:fo,e.baseUrl&&(s.baseUrl=e.baseUrl),e.previews&&(s.mediaType.previews=e.previews),e.timeZone&&(s.headers["time-zone"]=e.timeZone),this.request=Hi.defaults(s),this.graphql=Wu(this.request).defaults(s),this.log=eh(e.log),this.hook=t,e.authStrategy){const{authStrategy:o,...n}=e,a=o(Object.assign({request:this.request,log:this.log,octokit:this,octokitOptions:n},e.auth));t.wrap("request",a.hook),this.auth=a}else if(!e.auth)this.auth=async()=>({type:"unauthenticated"});else{const o=Qu(e.auth);t.wrap("request",o.hook),this.auth=o}const i=this.constructor;for(let o=0;o<i.plugins.length;++o)Object.assign(this,i.plugins[o](this,e))}static defaults(e){return class extends this{constructor(...s){const i=s[0]||{};if(typeof e=="function"){super(e(i));return}super(Object.assign({},e,i,i.userAgent&&e.userAgent?{userAgent:`${i.userAgent} ${e.userAgent}`}:null))}}}static plugin(...e){var i;const t=this.plugins;return i=class extends this{},H(i,"plugins",t.concat(e.filter(o=>!t.includes(o)))),i}},H(Rs,"VERSION",ea),H(Rs,"plugins",[]),Rs);const rh="5.3.1";function ta(r){r.hook.wrap("request",(e,t)=>{r.log.debug("request",t);const s=Date.now(),i=r.request.endpoint.parse(t),o=i.url.replace(t.baseUrl,"");return e(t).then(n=>{const a=n.headers["x-github-request-id"];return r.log.info(`${i.method} ${o} - ${n.status} with id ${a} in ${Date.now()-s}ms`),n}).catch(n=>{var u;const a=((u=n.response)==null?void 0:u.headers["x-github-request-id"])||"UNKNOWN";throw r.log.error(`${i.method} ${o} - ${n.status} with id ${a} in ${Date.now()-s}ms`),n})})}ta.VERSION=rh;var sh="0.0.0-development";function ih(r){if(!r.data)return{...r,data:[]};if(!("total_count"in r.data&&!("url"in r.data)))return r;const t=r.data.incomplete_results,s=r.data.repository_selection,i=r.data.total_count;delete r.data.incomplete_results,delete r.data.repository_selection,delete r.data.total_count;const o=Object.keys(r.data)[0],n=r.data[o];return r.data=n,typeof t<"u"&&(r.data.incomplete_results=t),typeof s<"u"&&(r.data.repository_selection=s),r.data.total_count=i,r}function dn(r,e,t){const s=typeof e=="function"?e.endpoint(t):r.request.endpoint(e,t),i=typeof e=="function"?e:r.request,o=s.method,n=s.headers;let a=s.url;return{[Symbol.asyncIterator]:()=>({async next(){if(!a)return{done:!0};try{const u=await i({method:o,url:a,headers:n}),h=ih(u);return a=((h.headers.link||"").match(/<([^<>]+)>;\s*rel="next"/)||[])[1],{value:h}}catch(u){if(u.status!==409)throw u;return a="",{value:{status:200,headers:{},data:[]}}}}})}}function ra(r,e,t,s){return typeof t=="function"&&(s=t,t=void 0),sa(r,[],dn(r,e,t)[Symbol.asyncIterator](),s)}function sa(r,e,t,s){return t.next().then(i=>{if(i.done)return e;let o=!1;function n(){o=!0}return e=e.concat(s?s(i.value,n):i.value.data),o?e:sa(r,e,t,s)})}Object.assign(ra,{iterator:dn});function ia(r){return{paginate:Object.assign(ra.bind(null,r),{iterator:dn.bind(null,r)})}}ia.VERSION=sh;const nh="13.5.0",oh={actions:{addCustomLabelsToSelfHostedRunnerForOrg:["POST /orgs/{org}/actions/runners/{runner_id}/labels"],addCustomLabelsToSelfHostedRunnerForRepo:["POST /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],addRepoAccessToSelfHostedRunnerGroupInOrg:["PUT /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories/{repository_id}"],addSelectedRepoToOrgSecret:["PUT /orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}"],addSelectedRepoToOrgVariable:["PUT /orgs/{org}/actions/variables/{name}/repositories/{repository_id}"],approveWorkflowRun:["POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve"],cancelWorkflowRun:["POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel"],createEnvironmentVariable:["POST /repos/{owner}/{repo}/environments/{environment_name}/variables"],createHostedRunnerForOrg:["POST /orgs/{org}/actions/hosted-runners"],createOrUpdateEnvironmentSecret:["PUT /repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"],createOrUpdateOrgSecret:["PUT /orgs/{org}/actions/secrets/{secret_name}"],createOrUpdateRepoSecret:["PUT /repos/{owner}/{repo}/actions/secrets/{secret_name}"],createOrgVariable:["POST /orgs/{org}/actions/variables"],createRegistrationTokenForOrg:["POST /orgs/{org}/actions/runners/registration-token"],createRegistrationTokenForRepo:["POST /repos/{owner}/{repo}/actions/runners/registration-token"],createRemoveTokenForOrg:["POST /orgs/{org}/actions/runners/remove-token"],createRemoveTokenForRepo:["POST /repos/{owner}/{repo}/actions/runners/remove-token"],createRepoVariable:["POST /repos/{owner}/{repo}/actions/variables"],createWorkflowDispatch:["POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"],deleteActionsCacheById:["DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}"],deleteActionsCacheByKey:["DELETE /repos/{owner}/{repo}/actions/caches{?key,ref}"],deleteArtifact:["DELETE /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"],deleteEnvironmentSecret:["DELETE /repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"],deleteEnvironmentVariable:["DELETE /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"],deleteHostedRunnerForOrg:["DELETE /orgs/{org}/actions/hosted-runners/{hosted_runner_id}"],deleteOrgSecret:["DELETE /orgs/{org}/actions/secrets/{secret_name}"],deleteOrgVariable:["DELETE /orgs/{org}/actions/variables/{name}"],deleteRepoSecret:["DELETE /repos/{owner}/{repo}/actions/secrets/{secret_name}"],deleteRepoVariable:["DELETE /repos/{owner}/{repo}/actions/variables/{name}"],deleteSelfHostedRunnerFromOrg:["DELETE /orgs/{org}/actions/runners/{runner_id}"],deleteSelfHostedRunnerFromRepo:["DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}"],deleteWorkflowRun:["DELETE /repos/{owner}/{repo}/actions/runs/{run_id}"],deleteWorkflowRunLogs:["DELETE /repos/{owner}/{repo}/actions/runs/{run_id}/logs"],disableSelectedRepositoryGithubActionsOrganization:["DELETE /orgs/{org}/actions/permissions/repositories/{repository_id}"],disableWorkflow:["PUT /repos/{owner}/{repo}/actions/workflows/{workflow_id}/disable"],downloadArtifact:["GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}"],downloadJobLogsForWorkflowRun:["GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs"],downloadWorkflowRunAttemptLogs:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/logs"],downloadWorkflowRunLogs:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs"],enableSelectedRepositoryGithubActionsOrganization:["PUT /orgs/{org}/actions/permissions/repositories/{repository_id}"],enableWorkflow:["PUT /repos/{owner}/{repo}/actions/workflows/{workflow_id}/enable"],forceCancelWorkflowRun:["POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel"],generateRunnerJitconfigForOrg:["POST /orgs/{org}/actions/runners/generate-jitconfig"],generateRunnerJitconfigForRepo:["POST /repos/{owner}/{repo}/actions/runners/generate-jitconfig"],getActionsCacheList:["GET /repos/{owner}/{repo}/actions/caches"],getActionsCacheUsage:["GET /repos/{owner}/{repo}/actions/cache/usage"],getActionsCacheUsageByRepoForOrg:["GET /orgs/{org}/actions/cache/usage-by-repository"],getActionsCacheUsageForOrg:["GET /orgs/{org}/actions/cache/usage"],getAllowedActionsOrganization:["GET /orgs/{org}/actions/permissions/selected-actions"],getAllowedActionsRepository:["GET /repos/{owner}/{repo}/actions/permissions/selected-actions"],getArtifact:["GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"],getCustomOidcSubClaimForRepo:["GET /repos/{owner}/{repo}/actions/oidc/customization/sub"],getEnvironmentPublicKey:["GET /repos/{owner}/{repo}/environments/{environment_name}/secrets/public-key"],getEnvironmentSecret:["GET /repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"],getEnvironmentVariable:["GET /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"],getGithubActionsDefaultWorkflowPermissionsOrganization:["GET /orgs/{org}/actions/permissions/workflow"],getGithubActionsDefaultWorkflowPermissionsRepository:["GET /repos/{owner}/{repo}/actions/permissions/workflow"],getGithubActionsPermissionsOrganization:["GET /orgs/{org}/actions/permissions"],getGithubActionsPermissionsRepository:["GET /repos/{owner}/{repo}/actions/permissions"],getHostedRunnerForOrg:["GET /orgs/{org}/actions/hosted-runners/{hosted_runner_id}"],getHostedRunnersGithubOwnedImagesForOrg:["GET /orgs/{org}/actions/hosted-runners/images/github-owned"],getHostedRunnersLimitsForOrg:["GET /orgs/{org}/actions/hosted-runners/limits"],getHostedRunnersMachineSpecsForOrg:["GET /orgs/{org}/actions/hosted-runners/machine-sizes"],getHostedRunnersPartnerImagesForOrg:["GET /orgs/{org}/actions/hosted-runners/images/partner"],getHostedRunnersPlatformsForOrg:["GET /orgs/{org}/actions/hosted-runners/platforms"],getJobForWorkflowRun:["GET /repos/{owner}/{repo}/actions/jobs/{job_id}"],getOrgPublicKey:["GET /orgs/{org}/actions/secrets/public-key"],getOrgSecret:["GET /orgs/{org}/actions/secrets/{secret_name}"],getOrgVariable:["GET /orgs/{org}/actions/variables/{name}"],getPendingDeploymentsForRun:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments"],getRepoPermissions:["GET /repos/{owner}/{repo}/actions/permissions",{},{renamed:["actions","getGithubActionsPermissionsRepository"]}],getRepoPublicKey:["GET /repos/{owner}/{repo}/actions/secrets/public-key"],getRepoSecret:["GET /repos/{owner}/{repo}/actions/secrets/{secret_name}"],getRepoVariable:["GET /repos/{owner}/{repo}/actions/variables/{name}"],getReviewsForRun:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals"],getSelfHostedRunnerForOrg:["GET /orgs/{org}/actions/runners/{runner_id}"],getSelfHostedRunnerForRepo:["GET /repos/{owner}/{repo}/actions/runners/{runner_id}"],getWorkflow:["GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}"],getWorkflowAccessToRepository:["GET /repos/{owner}/{repo}/actions/permissions/access"],getWorkflowRun:["GET /repos/{owner}/{repo}/actions/runs/{run_id}"],getWorkflowRunAttempt:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}"],getWorkflowRunUsage:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/timing"],getWorkflowUsage:["GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/timing"],listArtifactsForRepo:["GET /repos/{owner}/{repo}/actions/artifacts"],listEnvironmentSecrets:["GET /repos/{owner}/{repo}/environments/{environment_name}/secrets"],listEnvironmentVariables:["GET /repos/{owner}/{repo}/environments/{environment_name}/variables"],listGithubHostedRunnersInGroupForOrg:["GET /orgs/{org}/actions/runner-groups/{runner_group_id}/hosted-runners"],listHostedRunnersForOrg:["GET /orgs/{org}/actions/hosted-runners"],listJobsForWorkflowRun:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs"],listJobsForWorkflowRunAttempt:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs"],listLabelsForSelfHostedRunnerForOrg:["GET /orgs/{org}/actions/runners/{runner_id}/labels"],listLabelsForSelfHostedRunnerForRepo:["GET /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],listOrgSecrets:["GET /orgs/{org}/actions/secrets"],listOrgVariables:["GET /orgs/{org}/actions/variables"],listRepoOrganizationSecrets:["GET /repos/{owner}/{repo}/actions/organization-secrets"],listRepoOrganizationVariables:["GET /repos/{owner}/{repo}/actions/organization-variables"],listRepoSecrets:["GET /repos/{owner}/{repo}/actions/secrets"],listRepoVariables:["GET /repos/{owner}/{repo}/actions/variables"],listRepoWorkflows:["GET /repos/{owner}/{repo}/actions/workflows"],listRunnerApplicationsForOrg:["GET /orgs/{org}/actions/runners/downloads"],listRunnerApplicationsForRepo:["GET /repos/{owner}/{repo}/actions/runners/downloads"],listSelectedReposForOrgSecret:["GET /orgs/{org}/actions/secrets/{secret_name}/repositories"],listSelectedReposForOrgVariable:["GET /orgs/{org}/actions/variables/{name}/repositories"],listSelectedRepositoriesEnabledGithubActionsOrganization:["GET /orgs/{org}/actions/permissions/repositories"],listSelfHostedRunnersForOrg:["GET /orgs/{org}/actions/runners"],listSelfHostedRunnersForRepo:["GET /repos/{owner}/{repo}/actions/runners"],listWorkflowRunArtifacts:["GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"],listWorkflowRuns:["GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"],listWorkflowRunsForRepo:["GET /repos/{owner}/{repo}/actions/runs"],reRunJobForWorkflowRun:["POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun"],reRunWorkflow:["POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun"],reRunWorkflowFailedJobs:["POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs"],removeAllCustomLabelsFromSelfHostedRunnerForOrg:["DELETE /orgs/{org}/actions/runners/{runner_id}/labels"],removeAllCustomLabelsFromSelfHostedRunnerForRepo:["DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],removeCustomLabelFromSelfHostedRunnerForOrg:["DELETE /orgs/{org}/actions/runners/{runner_id}/labels/{name}"],removeCustomLabelFromSelfHostedRunnerForRepo:["DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}/labels/{name}"],removeSelectedRepoFromOrgSecret:["DELETE /orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}"],removeSelectedRepoFromOrgVariable:["DELETE /orgs/{org}/actions/variables/{name}/repositories/{repository_id}"],reviewCustomGatesForRun:["POST /repos/{owner}/{repo}/actions/runs/{run_id}/deployment_protection_rule"],reviewPendingDeploymentsForRun:["POST /repos/{owner}/{repo}/actions/runs/{run_id}/pending_deployments"],setAllowedActionsOrganization:["PUT /orgs/{org}/actions/permissions/selected-actions"],setAllowedActionsRepository:["PUT /repos/{owner}/{repo}/actions/permissions/selected-actions"],setCustomLabelsForSelfHostedRunnerForOrg:["PUT /orgs/{org}/actions/runners/{runner_id}/labels"],setCustomLabelsForSelfHostedRunnerForRepo:["PUT /repos/{owner}/{repo}/actions/runners/{runner_id}/labels"],setCustomOidcSubClaimForRepo:["PUT /repos/{owner}/{repo}/actions/oidc/customization/sub"],setGithubActionsDefaultWorkflowPermissionsOrganization:["PUT /orgs/{org}/actions/permissions/workflow"],setGithubActionsDefaultWorkflowPermissionsRepository:["PUT /repos/{owner}/{repo}/actions/permissions/workflow"],setGithubActionsPermissionsOrganization:["PUT /orgs/{org}/actions/permissions"],setGithubActionsPermissionsRepository:["PUT /repos/{owner}/{repo}/actions/permissions"],setSelectedReposForOrgSecret:["PUT /orgs/{org}/actions/secrets/{secret_name}/repositories"],setSelectedReposForOrgVariable:["PUT /orgs/{org}/actions/variables/{name}/repositories"],setSelectedRepositoriesEnabledGithubActionsOrganization:["PUT /orgs/{org}/actions/permissions/repositories"],setWorkflowAccessToRepository:["PUT /repos/{owner}/{repo}/actions/permissions/access"],updateEnvironmentVariable:["PATCH /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}"],updateHostedRunnerForOrg:["PATCH /orgs/{org}/actions/hosted-runners/{hosted_runner_id}"],updateOrgVariable:["PATCH /orgs/{org}/actions/variables/{name}"],updateRepoVariable:["PATCH /repos/{owner}/{repo}/actions/variables/{name}"]},activity:{checkRepoIsStarredByAuthenticatedUser:["GET /user/starred/{owner}/{repo}"],deleteRepoSubscription:["DELETE /repos/{owner}/{repo}/subscription"],deleteThreadSubscription:["DELETE /notifications/threads/{thread_id}/subscription"],getFeeds:["GET /feeds"],getRepoSubscription:["GET /repos/{owner}/{repo}/subscription"],getThread:["GET /notifications/threads/{thread_id}"],getThreadSubscriptionForAuthenticatedUser:["GET /notifications/threads/{thread_id}/subscription"],listEventsForAuthenticatedUser:["GET /users/{username}/events"],listNotificationsForAuthenticatedUser:["GET /notifications"],listOrgEventsForAuthenticatedUser:["GET /users/{username}/events/orgs/{org}"],listPublicEvents:["GET /events"],listPublicEventsForRepoNetwork:["GET /networks/{owner}/{repo}/events"],listPublicEventsForUser:["GET /users/{username}/events/public"],listPublicOrgEvents:["GET /orgs/{org}/events"],listReceivedEventsForUser:["GET /users/{username}/received_events"],listReceivedPublicEventsForUser:["GET /users/{username}/received_events/public"],listRepoEvents:["GET /repos/{owner}/{repo}/events"],listRepoNotificationsForAuthenticatedUser:["GET /repos/{owner}/{repo}/notifications"],listReposStarredByAuthenticatedUser:["GET /user/starred"],listReposStarredByUser:["GET /users/{username}/starred"],listReposWatchedByUser:["GET /users/{username}/subscriptions"],listStargazersForRepo:["GET /repos/{owner}/{repo}/stargazers"],listWatchedReposForAuthenticatedUser:["GET /user/subscriptions"],listWatchersForRepo:["GET /repos/{owner}/{repo}/subscribers"],markNotificationsAsRead:["PUT /notifications"],markRepoNotificationsAsRead:["PUT /repos/{owner}/{repo}/notifications"],markThreadAsDone:["DELETE /notifications/threads/{thread_id}"],markThreadAsRead:["PATCH /notifications/threads/{thread_id}"],setRepoSubscription:["PUT /repos/{owner}/{repo}/subscription"],setThreadSubscription:["PUT /notifications/threads/{thread_id}/subscription"],starRepoForAuthenticatedUser:["PUT /user/starred/{owner}/{repo}"],unstarRepoForAuthenticatedUser:["DELETE /user/starred/{owner}/{repo}"]},apps:{addRepoToInstallation:["PUT /user/installations/{installation_id}/repositories/{repository_id}",{},{renamed:["apps","addRepoToInstallationForAuthenticatedUser"]}],addRepoToInstallationForAuthenticatedUser:["PUT /user/installations/{installation_id}/repositories/{repository_id}"],checkToken:["POST /applications/{client_id}/token"],createFromManifest:["POST /app-manifests/{code}/conversions"],createInstallationAccessToken:["POST /app/installations/{installation_id}/access_tokens"],deleteAuthorization:["DELETE /applications/{client_id}/grant"],deleteInstallation:["DELETE /app/installations/{installation_id}"],deleteToken:["DELETE /applications/{client_id}/token"],getAuthenticated:["GET /app"],getBySlug:["GET /apps/{app_slug}"],getInstallation:["GET /app/installations/{installation_id}"],getOrgInstallation:["GET /orgs/{org}/installation"],getRepoInstallation:["GET /repos/{owner}/{repo}/installation"],getSubscriptionPlanForAccount:["GET /marketplace_listing/accounts/{account_id}"],getSubscriptionPlanForAccountStubbed:["GET /marketplace_listing/stubbed/accounts/{account_id}"],getUserInstallation:["GET /users/{username}/installation"],getWebhookConfigForApp:["GET /app/hook/config"],getWebhookDelivery:["GET /app/hook/deliveries/{delivery_id}"],listAccountsForPlan:["GET /marketplace_listing/plans/{plan_id}/accounts"],listAccountsForPlanStubbed:["GET /marketplace_listing/stubbed/plans/{plan_id}/accounts"],listInstallationReposForAuthenticatedUser:["GET /user/installations/{installation_id}/repositories"],listInstallationRequestsForAuthenticatedApp:["GET /app/installation-requests"],listInstallations:["GET /app/installations"],listInstallationsForAuthenticatedUser:["GET /user/installations"],listPlans:["GET /marketplace_listing/plans"],listPlansStubbed:["GET /marketplace_listing/stubbed/plans"],listReposAccessibleToInstallation:["GET /installation/repositories"],listSubscriptionsForAuthenticatedUser:["GET /user/marketplace_purchases"],listSubscriptionsForAuthenticatedUserStubbed:["GET /user/marketplace_purchases/stubbed"],listWebhookDeliveries:["GET /app/hook/deliveries"],redeliverWebhookDelivery:["POST /app/hook/deliveries/{delivery_id}/attempts"],removeRepoFromInstallation:["DELETE /user/installations/{installation_id}/repositories/{repository_id}",{},{renamed:["apps","removeRepoFromInstallationForAuthenticatedUser"]}],removeRepoFromInstallationForAuthenticatedUser:["DELETE /user/installations/{installation_id}/repositories/{repository_id}"],resetToken:["PATCH /applications/{client_id}/token"],revokeInstallationAccessToken:["DELETE /installation/token"],scopeToken:["POST /applications/{client_id}/token/scoped"],suspendInstallation:["PUT /app/installations/{installation_id}/suspended"],unsuspendInstallation:["DELETE /app/installations/{installation_id}/suspended"],updateWebhookConfigForApp:["PATCH /app/hook/config"]},billing:{getGithubActionsBillingOrg:["GET /orgs/{org}/settings/billing/actions"],getGithubActionsBillingUser:["GET /users/{username}/settings/billing/actions"],getGithubBillingUsageReportOrg:["GET /organizations/{org}/settings/billing/usage"],getGithubPackagesBillingOrg:["GET /orgs/{org}/settings/billing/packages"],getGithubPackagesBillingUser:["GET /users/{username}/settings/billing/packages"],getSharedStorageBillingOrg:["GET /orgs/{org}/settings/billing/shared-storage"],getSharedStorageBillingUser:["GET /users/{username}/settings/billing/shared-storage"]},checks:{create:["POST /repos/{owner}/{repo}/check-runs"],createSuite:["POST /repos/{owner}/{repo}/check-suites"],get:["GET /repos/{owner}/{repo}/check-runs/{check_run_id}"],getSuite:["GET /repos/{owner}/{repo}/check-suites/{check_suite_id}"],listAnnotations:["GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations"],listForRef:["GET /repos/{owner}/{repo}/commits/{ref}/check-runs"],listForSuite:["GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs"],listSuitesForRef:["GET /repos/{owner}/{repo}/commits/{ref}/check-suites"],rerequestRun:["POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest"],rerequestSuite:["POST /repos/{owner}/{repo}/check-suites/{check_suite_id}/rerequest"],setSuitesPreferences:["PATCH /repos/{owner}/{repo}/check-suites/preferences"],update:["PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}"]},codeScanning:{commitAutofix:["POST /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix/commits"],createAutofix:["POST /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix"],createVariantAnalysis:["POST /repos/{owner}/{repo}/code-scanning/codeql/variant-analyses"],deleteAnalysis:["DELETE /repos/{owner}/{repo}/code-scanning/analyses/{analysis_id}{?confirm_delete}"],deleteCodeqlDatabase:["DELETE /repos/{owner}/{repo}/code-scanning/codeql/databases/{language}"],getAlert:["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}",{},{renamedParameters:{alert_id:"alert_number"}}],getAnalysis:["GET /repos/{owner}/{repo}/code-scanning/analyses/{analysis_id}"],getAutofix:["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix"],getCodeqlDatabase:["GET /repos/{owner}/{repo}/code-scanning/codeql/databases/{language}"],getDefaultSetup:["GET /repos/{owner}/{repo}/code-scanning/default-setup"],getSarif:["GET /repos/{owner}/{repo}/code-scanning/sarifs/{sarif_id}"],getVariantAnalysis:["GET /repos/{owner}/{repo}/code-scanning/codeql/variant-analyses/{codeql_variant_analysis_id}"],getVariantAnalysisRepoTask:["GET /repos/{owner}/{repo}/code-scanning/codeql/variant-analyses/{codeql_variant_analysis_id}/repos/{repo_owner}/{repo_name}"],listAlertInstances:["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances"],listAlertsForOrg:["GET /orgs/{org}/code-scanning/alerts"],listAlertsForRepo:["GET /repos/{owner}/{repo}/code-scanning/alerts"],listAlertsInstances:["GET /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/instances",{},{renamed:["codeScanning","listAlertInstances"]}],listCodeqlDatabases:["GET /repos/{owner}/{repo}/code-scanning/codeql/databases"],listRecentAnalyses:["GET /repos/{owner}/{repo}/code-scanning/analyses"],updateAlert:["PATCH /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}"],updateDefaultSetup:["PATCH /repos/{owner}/{repo}/code-scanning/default-setup"],uploadSarif:["POST /repos/{owner}/{repo}/code-scanning/sarifs"]},codeSecurity:{attachConfiguration:["POST /orgs/{org}/code-security/configurations/{configuration_id}/attach"],attachEnterpriseConfiguration:["POST /enterprises/{enterprise}/code-security/configurations/{configuration_id}/attach"],createConfiguration:["POST /orgs/{org}/code-security/configurations"],createConfigurationForEnterprise:["POST /enterprises/{enterprise}/code-security/configurations"],deleteConfiguration:["DELETE /orgs/{org}/code-security/configurations/{configuration_id}"],deleteConfigurationForEnterprise:["DELETE /enterprises/{enterprise}/code-security/configurations/{configuration_id}"],detachConfiguration:["DELETE /orgs/{org}/code-security/configurations/detach"],getConfiguration:["GET /orgs/{org}/code-security/configurations/{configuration_id}"],getConfigurationForRepository:["GET /repos/{owner}/{repo}/code-security-configuration"],getConfigurationsForEnterprise:["GET /enterprises/{enterprise}/code-security/configurations"],getConfigurationsForOrg:["GET /orgs/{org}/code-security/configurations"],getDefaultConfigurations:["GET /orgs/{org}/code-security/configurations/defaults"],getDefaultConfigurationsForEnterprise:["GET /enterprises/{enterprise}/code-security/configurations/defaults"],getRepositoriesForConfiguration:["GET /orgs/{org}/code-security/configurations/{configuration_id}/repositories"],getRepositoriesForEnterpriseConfiguration:["GET /enterprises/{enterprise}/code-security/configurations/{configuration_id}/repositories"],getSingleConfigurationForEnterprise:["GET /enterprises/{enterprise}/code-security/configurations/{configuration_id}"],setConfigurationAsDefault:["PUT /orgs/{org}/code-security/configurations/{configuration_id}/defaults"],setConfigurationAsDefaultForEnterprise:["PUT /enterprises/{enterprise}/code-security/configurations/{configuration_id}/defaults"],updateConfiguration:["PATCH /orgs/{org}/code-security/configurations/{configuration_id}"],updateEnterpriseConfiguration:["PATCH /enterprises/{enterprise}/code-security/configurations/{configuration_id}"]},codesOfConduct:{getAllCodesOfConduct:["GET /codes_of_conduct"],getConductCode:["GET /codes_of_conduct/{key}"]},codespaces:{addRepositoryForSecretForAuthenticatedUser:["PUT /user/codespaces/secrets/{secret_name}/repositories/{repository_id}"],addSelectedRepoToOrgSecret:["PUT /orgs/{org}/codespaces/secrets/{secret_name}/repositories/{repository_id}"],checkPermissionsForDevcontainer:["GET /repos/{owner}/{repo}/codespaces/permissions_check"],codespaceMachinesForAuthenticatedUser:["GET /user/codespaces/{codespace_name}/machines"],createForAuthenticatedUser:["POST /user/codespaces"],createOrUpdateOrgSecret:["PUT /orgs/{org}/codespaces/secrets/{secret_name}"],createOrUpdateRepoSecret:["PUT /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],createOrUpdateSecretForAuthenticatedUser:["PUT /user/codespaces/secrets/{secret_name}"],createWithPrForAuthenticatedUser:["POST /repos/{owner}/{repo}/pulls/{pull_number}/codespaces"],createWithRepoForAuthenticatedUser:["POST /repos/{owner}/{repo}/codespaces"],deleteForAuthenticatedUser:["DELETE /user/codespaces/{codespace_name}"],deleteFromOrganization:["DELETE /orgs/{org}/members/{username}/codespaces/{codespace_name}"],deleteOrgSecret:["DELETE /orgs/{org}/codespaces/secrets/{secret_name}"],deleteRepoSecret:["DELETE /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],deleteSecretForAuthenticatedUser:["DELETE /user/codespaces/secrets/{secret_name}"],exportForAuthenticatedUser:["POST /user/codespaces/{codespace_name}/exports"],getCodespacesForUserInOrg:["GET /orgs/{org}/members/{username}/codespaces"],getExportDetailsForAuthenticatedUser:["GET /user/codespaces/{codespace_name}/exports/{export_id}"],getForAuthenticatedUser:["GET /user/codespaces/{codespace_name}"],getOrgPublicKey:["GET /orgs/{org}/codespaces/secrets/public-key"],getOrgSecret:["GET /orgs/{org}/codespaces/secrets/{secret_name}"],getPublicKeyForAuthenticatedUser:["GET /user/codespaces/secrets/public-key"],getRepoPublicKey:["GET /repos/{owner}/{repo}/codespaces/secrets/public-key"],getRepoSecret:["GET /repos/{owner}/{repo}/codespaces/secrets/{secret_name}"],getSecretForAuthenticatedUser:["GET /user/codespaces/secrets/{secret_name}"],listDevcontainersInRepositoryForAuthenticatedUser:["GET /repos/{owner}/{repo}/codespaces/devcontainers"],listForAuthenticatedUser:["GET /user/codespaces"],listInOrganization:["GET /orgs/{org}/codespaces",{},{renamedParameters:{org_id:"org"}}],listInRepositoryForAuthenticatedUser:["GET /repos/{owner}/{repo}/codespaces"],listOrgSecrets:["GET /orgs/{org}/codespaces/secrets"],listRepoSecrets:["GET /repos/{owner}/{repo}/codespaces/secrets"],listRepositoriesForSecretForAuthenticatedUser:["GET /user/codespaces/secrets/{secret_name}/repositories"],listSecretsForAuthenticatedUser:["GET /user/codespaces/secrets"],listSelectedReposForOrgSecret:["GET /orgs/{org}/codespaces/secrets/{secret_name}/repositories"],preFlightWithRepoForAuthenticatedUser:["GET /repos/{owner}/{repo}/codespaces/new"],publishForAuthenticatedUser:["POST /user/codespaces/{codespace_name}/publish"],removeRepositoryForSecretForAuthenticatedUser:["DELETE /user/codespaces/secrets/{secret_name}/repositories/{repository_id}"],removeSelectedRepoFromOrgSecret:["DELETE /orgs/{org}/codespaces/secrets/{secret_name}/repositories/{repository_id}"],repoMachinesForAuthenticatedUser:["GET /repos/{owner}/{repo}/codespaces/machines"],setRepositoriesForSecretForAuthenticatedUser:["PUT /user/codespaces/secrets/{secret_name}/repositories"],setSelectedReposForOrgSecret:["PUT /orgs/{org}/codespaces/secrets/{secret_name}/repositories"],startForAuthenticatedUser:["POST /user/codespaces/{codespace_name}/start"],stopForAuthenticatedUser:["POST /user/codespaces/{codespace_name}/stop"],stopInOrganization:["POST /orgs/{org}/members/{username}/codespaces/{codespace_name}/stop"],updateForAuthenticatedUser:["PATCH /user/codespaces/{codespace_name}"]},copilot:{addCopilotSeatsForTeams:["POST /orgs/{org}/copilot/billing/selected_teams"],addCopilotSeatsForUsers:["POST /orgs/{org}/copilot/billing/selected_users"],cancelCopilotSeatAssignmentForTeams:["DELETE /orgs/{org}/copilot/billing/selected_teams"],cancelCopilotSeatAssignmentForUsers:["DELETE /orgs/{org}/copilot/billing/selected_users"],copilotMetricsForOrganization:["GET /orgs/{org}/copilot/metrics"],copilotMetricsForTeam:["GET /orgs/{org}/team/{team_slug}/copilot/metrics"],getCopilotOrganizationDetails:["GET /orgs/{org}/copilot/billing"],getCopilotSeatDetailsForUser:["GET /orgs/{org}/members/{username}/copilot"],listCopilotSeats:["GET /orgs/{org}/copilot/billing/seats"],usageMetricsForOrg:["GET /orgs/{org}/copilot/usage"],usageMetricsForTeam:["GET /orgs/{org}/team/{team_slug}/copilot/usage"]},dependabot:{addSelectedRepoToOrgSecret:["PUT /orgs/{org}/dependabot/secrets/{secret_name}/repositories/{repository_id}"],createOrUpdateOrgSecret:["PUT /orgs/{org}/dependabot/secrets/{secret_name}"],createOrUpdateRepoSecret:["PUT /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],deleteOrgSecret:["DELETE /orgs/{org}/dependabot/secrets/{secret_name}"],deleteRepoSecret:["DELETE /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],getAlert:["GET /repos/{owner}/{repo}/dependabot/alerts/{alert_number}"],getOrgPublicKey:["GET /orgs/{org}/dependabot/secrets/public-key"],getOrgSecret:["GET /orgs/{org}/dependabot/secrets/{secret_name}"],getRepoPublicKey:["GET /repos/{owner}/{repo}/dependabot/secrets/public-key"],getRepoSecret:["GET /repos/{owner}/{repo}/dependabot/secrets/{secret_name}"],listAlertsForEnterprise:["GET /enterprises/{enterprise}/dependabot/alerts"],listAlertsForOrg:["GET /orgs/{org}/dependabot/alerts"],listAlertsForRepo:["GET /repos/{owner}/{repo}/dependabot/alerts"],listOrgSecrets:["GET /orgs/{org}/dependabot/secrets"],listRepoSecrets:["GET /repos/{owner}/{repo}/dependabot/secrets"],listSelectedReposForOrgSecret:["GET /orgs/{org}/dependabot/secrets/{secret_name}/repositories"],removeSelectedRepoFromOrgSecret:["DELETE /orgs/{org}/dependabot/secrets/{secret_name}/repositories/{repository_id}"],setSelectedReposForOrgSecret:["PUT /orgs/{org}/dependabot/secrets/{secret_name}/repositories"],updateAlert:["PATCH /repos/{owner}/{repo}/dependabot/alerts/{alert_number}"]},dependencyGraph:{createRepositorySnapshot:["POST /repos/{owner}/{repo}/dependency-graph/snapshots"],diffRange:["GET /repos/{owner}/{repo}/dependency-graph/compare/{basehead}"],exportSbom:["GET /repos/{owner}/{repo}/dependency-graph/sbom"]},emojis:{get:["GET /emojis"]},gists:{checkIsStarred:["GET /gists/{gist_id}/star"],create:["POST /gists"],createComment:["POST /gists/{gist_id}/comments"],delete:["DELETE /gists/{gist_id}"],deleteComment:["DELETE /gists/{gist_id}/comments/{comment_id}"],fork:["POST /gists/{gist_id}/forks"],get:["GET /gists/{gist_id}"],getComment:["GET /gists/{gist_id}/comments/{comment_id}"],getRevision:["GET /gists/{gist_id}/{sha}"],list:["GET /gists"],listComments:["GET /gists/{gist_id}/comments"],listCommits:["GET /gists/{gist_id}/commits"],listForUser:["GET /users/{username}/gists"],listForks:["GET /gists/{gist_id}/forks"],listPublic:["GET /gists/public"],listStarred:["GET /gists/starred"],star:["PUT /gists/{gist_id}/star"],unstar:["DELETE /gists/{gist_id}/star"],update:["PATCH /gists/{gist_id}"],updateComment:["PATCH /gists/{gist_id}/comments/{comment_id}"]},git:{createBlob:["POST /repos/{owner}/{repo}/git/blobs"],createCommit:["POST /repos/{owner}/{repo}/git/commits"],createRef:["POST /repos/{owner}/{repo}/git/refs"],createTag:["POST /repos/{owner}/{repo}/git/tags"],createTree:["POST /repos/{owner}/{repo}/git/trees"],deleteRef:["DELETE /repos/{owner}/{repo}/git/refs/{ref}"],getBlob:["GET /repos/{owner}/{repo}/git/blobs/{file_sha}"],getCommit:["GET /repos/{owner}/{repo}/git/commits/{commit_sha}"],getRef:["GET /repos/{owner}/{repo}/git/ref/{ref}"],getTag:["GET /repos/{owner}/{repo}/git/tags/{tag_sha}"],getTree:["GET /repos/{owner}/{repo}/git/trees/{tree_sha}"],listMatchingRefs:["GET /repos/{owner}/{repo}/git/matching-refs/{ref}"],updateRef:["PATCH /repos/{owner}/{repo}/git/refs/{ref}"]},gitignore:{getAllTemplates:["GET /gitignore/templates"],getTemplate:["GET /gitignore/templates/{name}"]},hostedCompute:{createNetworkConfigurationForOrg:["POST /orgs/{org}/settings/network-configurations"],deleteNetworkConfigurationFromOrg:["DELETE /orgs/{org}/settings/network-configurations/{network_configuration_id}"],getNetworkConfigurationForOrg:["GET /orgs/{org}/settings/network-configurations/{network_configuration_id}"],getNetworkSettingsForOrg:["GET /orgs/{org}/settings/network-settings/{network_settings_id}"],listNetworkConfigurationsForOrg:["GET /orgs/{org}/settings/network-configurations"],updateNetworkConfigurationForOrg:["PATCH /orgs/{org}/settings/network-configurations/{network_configuration_id}"]},interactions:{getRestrictionsForAuthenticatedUser:["GET /user/interaction-limits"],getRestrictionsForOrg:["GET /orgs/{org}/interaction-limits"],getRestrictionsForRepo:["GET /repos/{owner}/{repo}/interaction-limits"],getRestrictionsForYourPublicRepos:["GET /user/interaction-limits",{},{renamed:["interactions","getRestrictionsForAuthenticatedUser"]}],removeRestrictionsForAuthenticatedUser:["DELETE /user/interaction-limits"],removeRestrictionsForOrg:["DELETE /orgs/{org}/interaction-limits"],removeRestrictionsForRepo:["DELETE /repos/{owner}/{repo}/interaction-limits"],removeRestrictionsForYourPublicRepos:["DELETE /user/interaction-limits",{},{renamed:["interactions","removeRestrictionsForAuthenticatedUser"]}],setRestrictionsForAuthenticatedUser:["PUT /user/interaction-limits"],setRestrictionsForOrg:["PUT /orgs/{org}/interaction-limits"],setRestrictionsForRepo:["PUT /repos/{owner}/{repo}/interaction-limits"],setRestrictionsForYourPublicRepos:["PUT /user/interaction-limits",{},{renamed:["interactions","setRestrictionsForAuthenticatedUser"]}]},issues:{addAssignees:["POST /repos/{owner}/{repo}/issues/{issue_number}/assignees"],addLabels:["POST /repos/{owner}/{repo}/issues/{issue_number}/labels"],addSubIssue:["POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues"],checkUserCanBeAssigned:["GET /repos/{owner}/{repo}/assignees/{assignee}"],checkUserCanBeAssignedToIssue:["GET /repos/{owner}/{repo}/issues/{issue_number}/assignees/{assignee}"],create:["POST /repos/{owner}/{repo}/issues"],createComment:["POST /repos/{owner}/{repo}/issues/{issue_number}/comments"],createLabel:["POST /repos/{owner}/{repo}/labels"],createMilestone:["POST /repos/{owner}/{repo}/milestones"],deleteComment:["DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}"],deleteLabel:["DELETE /repos/{owner}/{repo}/labels/{name}"],deleteMilestone:["DELETE /repos/{owner}/{repo}/milestones/{milestone_number}"],get:["GET /repos/{owner}/{repo}/issues/{issue_number}"],getComment:["GET /repos/{owner}/{repo}/issues/comments/{comment_id}"],getEvent:["GET /repos/{owner}/{repo}/issues/events/{event_id}"],getLabel:["GET /repos/{owner}/{repo}/labels/{name}"],getMilestone:["GET /repos/{owner}/{repo}/milestones/{milestone_number}"],list:["GET /issues"],listAssignees:["GET /repos/{owner}/{repo}/assignees"],listComments:["GET /repos/{owner}/{repo}/issues/{issue_number}/comments"],listCommentsForRepo:["GET /repos/{owner}/{repo}/issues/comments"],listEvents:["GET /repos/{owner}/{repo}/issues/{issue_number}/events"],listEventsForRepo:["GET /repos/{owner}/{repo}/issues/events"],listEventsForTimeline:["GET /repos/{owner}/{repo}/issues/{issue_number}/timeline"],listForAuthenticatedUser:["GET /user/issues"],listForOrg:["GET /orgs/{org}/issues"],listForRepo:["GET /repos/{owner}/{repo}/issues"],listLabelsForMilestone:["GET /repos/{owner}/{repo}/milestones/{milestone_number}/labels"],listLabelsForRepo:["GET /repos/{owner}/{repo}/labels"],listLabelsOnIssue:["GET /repos/{owner}/{repo}/issues/{issue_number}/labels"],listMilestones:["GET /repos/{owner}/{repo}/milestones"],listSubIssues:["GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues"],lock:["PUT /repos/{owner}/{repo}/issues/{issue_number}/lock"],removeAllLabels:["DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels"],removeAssignees:["DELETE /repos/{owner}/{repo}/issues/{issue_number}/assignees"],removeLabel:["DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}"],removeSubIssue:["DELETE /repos/{owner}/{repo}/issues/{issue_number}/sub_issue"],reprioritizeSubIssue:["PATCH /repos/{owner}/{repo}/issues/{issue_number}/sub_issues/priority"],setLabels:["PUT /repos/{owner}/{repo}/issues/{issue_number}/labels"],unlock:["DELETE /repos/{owner}/{repo}/issues/{issue_number}/lock"],update:["PATCH /repos/{owner}/{repo}/issues/{issue_number}"],updateComment:["PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}"],updateLabel:["PATCH /repos/{owner}/{repo}/labels/{name}"],updateMilestone:["PATCH /repos/{owner}/{repo}/milestones/{milestone_number}"]},licenses:{get:["GET /licenses/{license}"],getAllCommonlyUsed:["GET /licenses"],getForRepo:["GET /repos/{owner}/{repo}/license"]},markdown:{render:["POST /markdown"],renderRaw:["POST /markdown/raw",{headers:{"content-type":"text/plain; charset=utf-8"}}]},meta:{get:["GET /meta"],getAllVersions:["GET /versions"],getOctocat:["GET /octocat"],getZen:["GET /zen"],root:["GET /"]},migrations:{deleteArchiveForAuthenticatedUser:["DELETE /user/migrations/{migration_id}/archive"],deleteArchiveForOrg:["DELETE /orgs/{org}/migrations/{migration_id}/archive"],downloadArchiveForOrg:["GET /orgs/{org}/migrations/{migration_id}/archive"],getArchiveForAuthenticatedUser:["GET /user/migrations/{migration_id}/archive"],getStatusForAuthenticatedUser:["GET /user/migrations/{migration_id}"],getStatusForOrg:["GET /orgs/{org}/migrations/{migration_id}"],listForAuthenticatedUser:["GET /user/migrations"],listForOrg:["GET /orgs/{org}/migrations"],listReposForAuthenticatedUser:["GET /user/migrations/{migration_id}/repositories"],listReposForOrg:["GET /orgs/{org}/migrations/{migration_id}/repositories"],listReposForUser:["GET /user/migrations/{migration_id}/repositories",{},{renamed:["migrations","listReposForAuthenticatedUser"]}],startForAuthenticatedUser:["POST /user/migrations"],startForOrg:["POST /orgs/{org}/migrations"],unlockRepoForAuthenticatedUser:["DELETE /user/migrations/{migration_id}/repos/{repo_name}/lock"],unlockRepoForOrg:["DELETE /orgs/{org}/migrations/{migration_id}/repos/{repo_name}/lock"]},oidc:{getOidcCustomSubTemplateForOrg:["GET /orgs/{org}/actions/oidc/customization/sub"],updateOidcCustomSubTemplateForOrg:["PUT /orgs/{org}/actions/oidc/customization/sub"]},orgs:{addSecurityManagerTeam:["PUT /orgs/{org}/security-managers/teams/{team_slug}",{},{deprecated:"octokit.rest.orgs.addSecurityManagerTeam() is deprecated, see https://docs.github.com/rest/orgs/security-managers#add-a-security-manager-team"}],assignTeamToOrgRole:["PUT /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}"],assignUserToOrgRole:["PUT /orgs/{org}/organization-roles/users/{username}/{role_id}"],blockUser:["PUT /orgs/{org}/blocks/{username}"],cancelInvitation:["DELETE /orgs/{org}/invitations/{invitation_id}"],checkBlockedUser:["GET /orgs/{org}/blocks/{username}"],checkMembershipForUser:["GET /orgs/{org}/members/{username}"],checkPublicMembershipForUser:["GET /orgs/{org}/public_members/{username}"],convertMemberToOutsideCollaborator:["PUT /orgs/{org}/outside_collaborators/{username}"],createInvitation:["POST /orgs/{org}/invitations"],createIssueType:["POST /orgs/{org}/issue-types"],createOrUpdateCustomProperties:["PATCH /orgs/{org}/properties/schema"],createOrUpdateCustomPropertiesValuesForRepos:["PATCH /orgs/{org}/properties/values"],createOrUpdateCustomProperty:["PUT /orgs/{org}/properties/schema/{custom_property_name}"],createWebhook:["POST /orgs/{org}/hooks"],delete:["DELETE /orgs/{org}"],deleteIssueType:["DELETE /orgs/{org}/issue-types/{issue_type_id}"],deleteWebhook:["DELETE /orgs/{org}/hooks/{hook_id}"],enableOrDisableSecurityProductOnAllOrgRepos:["POST /orgs/{org}/{security_product}/{enablement}",{},{deprecated:"octokit.rest.orgs.enableOrDisableSecurityProductOnAllOrgRepos() is deprecated, see https://docs.github.com/rest/orgs/orgs#enable-or-disable-a-security-feature-for-an-organization"}],get:["GET /orgs/{org}"],getAllCustomProperties:["GET /orgs/{org}/properties/schema"],getCustomProperty:["GET /orgs/{org}/properties/schema/{custom_property_name}"],getMembershipForAuthenticatedUser:["GET /user/memberships/orgs/{org}"],getMembershipForUser:["GET /orgs/{org}/memberships/{username}"],getOrgRole:["GET /orgs/{org}/organization-roles/{role_id}"],getOrgRulesetHistory:["GET /orgs/{org}/rulesets/{ruleset_id}/history"],getOrgRulesetVersion:["GET /orgs/{org}/rulesets/{ruleset_id}/history/{version_id}"],getWebhook:["GET /orgs/{org}/hooks/{hook_id}"],getWebhookConfigForOrg:["GET /orgs/{org}/hooks/{hook_id}/config"],getWebhookDelivery:["GET /orgs/{org}/hooks/{hook_id}/deliveries/{delivery_id}"],list:["GET /organizations"],listAppInstallations:["GET /orgs/{org}/installations"],listAttestations:["GET /orgs/{org}/attestations/{subject_digest}"],listBlockedUsers:["GET /orgs/{org}/blocks"],listCustomPropertiesValuesForRepos:["GET /orgs/{org}/properties/values"],listFailedInvitations:["GET /orgs/{org}/failed_invitations"],listForAuthenticatedUser:["GET /user/orgs"],listForUser:["GET /users/{username}/orgs"],listInvitationTeams:["GET /orgs/{org}/invitations/{invitation_id}/teams"],listIssueTypes:["GET /orgs/{org}/issue-types"],listMembers:["GET /orgs/{org}/members"],listMembershipsForAuthenticatedUser:["GET /user/memberships/orgs"],listOrgRoleTeams:["GET /orgs/{org}/organization-roles/{role_id}/teams"],listOrgRoleUsers:["GET /orgs/{org}/organization-roles/{role_id}/users"],listOrgRoles:["GET /orgs/{org}/organization-roles"],listOrganizationFineGrainedPermissions:["GET /orgs/{org}/organization-fine-grained-permissions"],listOutsideCollaborators:["GET /orgs/{org}/outside_collaborators"],listPatGrantRepositories:["GET /orgs/{org}/personal-access-tokens/{pat_id}/repositories"],listPatGrantRequestRepositories:["GET /orgs/{org}/personal-access-token-requests/{pat_request_id}/repositories"],listPatGrantRequests:["GET /orgs/{org}/personal-access-token-requests"],listPatGrants:["GET /orgs/{org}/personal-access-tokens"],listPendingInvitations:["GET /orgs/{org}/invitations"],listPublicMembers:["GET /orgs/{org}/public_members"],listSecurityManagerTeams:["GET /orgs/{org}/security-managers",{},{deprecated:"octokit.rest.orgs.listSecurityManagerTeams() is deprecated, see https://docs.github.com/rest/orgs/security-managers#list-security-manager-teams"}],listWebhookDeliveries:["GET /orgs/{org}/hooks/{hook_id}/deliveries"],listWebhooks:["GET /orgs/{org}/hooks"],pingWebhook:["POST /orgs/{org}/hooks/{hook_id}/pings"],redeliverWebhookDelivery:["POST /orgs/{org}/hooks/{hook_id}/deliveries/{delivery_id}/attempts"],removeCustomProperty:["DELETE /orgs/{org}/properties/schema/{custom_property_name}"],removeMember:["DELETE /orgs/{org}/members/{username}"],removeMembershipForUser:["DELETE /orgs/{org}/memberships/{username}"],removeOutsideCollaborator:["DELETE /orgs/{org}/outside_collaborators/{username}"],removePublicMembershipForAuthenticatedUser:["DELETE /orgs/{org}/public_members/{username}"],removeSecurityManagerTeam:["DELETE /orgs/{org}/security-managers/teams/{team_slug}",{},{deprecated:"octokit.rest.orgs.removeSecurityManagerTeam() is deprecated, see https://docs.github.com/rest/orgs/security-managers#remove-a-security-manager-team"}],reviewPatGrantRequest:["POST /orgs/{org}/personal-access-token-requests/{pat_request_id}"],reviewPatGrantRequestsInBulk:["POST /orgs/{org}/personal-access-token-requests"],revokeAllOrgRolesTeam:["DELETE /orgs/{org}/organization-roles/teams/{team_slug}"],revokeAllOrgRolesUser:["DELETE /orgs/{org}/organization-roles/users/{username}"],revokeOrgRoleTeam:["DELETE /orgs/{org}/organization-roles/teams/{team_slug}/{role_id}"],revokeOrgRoleUser:["DELETE /orgs/{org}/organization-roles/users/{username}/{role_id}"],setMembershipForUser:["PUT /orgs/{org}/memberships/{username}"],setPublicMembershipForAuthenticatedUser:["PUT /orgs/{org}/public_members/{username}"],unblockUser:["DELETE /orgs/{org}/blocks/{username}"],update:["PATCH /orgs/{org}"],updateIssueType:["PUT /orgs/{org}/issue-types/{issue_type_id}"],updateMembershipForAuthenticatedUser:["PATCH /user/memberships/orgs/{org}"],updatePatAccess:["POST /orgs/{org}/personal-access-tokens/{pat_id}"],updatePatAccesses:["POST /orgs/{org}/personal-access-tokens"],updateWebhook:["PATCH /orgs/{org}/hooks/{hook_id}"],updateWebhookConfigForOrg:["PATCH /orgs/{org}/hooks/{hook_id}/config"]},packages:{deletePackageForAuthenticatedUser:["DELETE /user/packages/{package_type}/{package_name}"],deletePackageForOrg:["DELETE /orgs/{org}/packages/{package_type}/{package_name}"],deletePackageForUser:["DELETE /users/{username}/packages/{package_type}/{package_name}"],deletePackageVersionForAuthenticatedUser:["DELETE /user/packages/{package_type}/{package_name}/versions/{package_version_id}"],deletePackageVersionForOrg:["DELETE /orgs/{org}/packages/{package_type}/{package_name}/versions/{package_version_id}"],deletePackageVersionForUser:["DELETE /users/{username}/packages/{package_type}/{package_name}/versions/{package_version_id}"],getAllPackageVersionsForAPackageOwnedByAnOrg:["GET /orgs/{org}/packages/{package_type}/{package_name}/versions",{},{renamed:["packages","getAllPackageVersionsForPackageOwnedByOrg"]}],getAllPackageVersionsForAPackageOwnedByTheAuthenticatedUser:["GET /user/packages/{package_type}/{package_name}/versions",{},{renamed:["packages","getAllPackageVersionsForPackageOwnedByAuthenticatedUser"]}],getAllPackageVersionsForPackageOwnedByAuthenticatedUser:["GET /user/packages/{package_type}/{package_name}/versions"],getAllPackageVersionsForPackageOwnedByOrg:["GET /orgs/{org}/packages/{package_type}/{package_name}/versions"],getAllPackageVersionsForPackageOwnedByUser:["GET /users/{username}/packages/{package_type}/{package_name}/versions"],getPackageForAuthenticatedUser:["GET /user/packages/{package_type}/{package_name}"],getPackageForOrganization:["GET /orgs/{org}/packages/{package_type}/{package_name}"],getPackageForUser:["GET /users/{username}/packages/{package_type}/{package_name}"],getPackageVersionForAuthenticatedUser:["GET /user/packages/{package_type}/{package_name}/versions/{package_version_id}"],getPackageVersionForOrganization:["GET /orgs/{org}/packages/{package_type}/{package_name}/versions/{package_version_id}"],getPackageVersionForUser:["GET /users/{username}/packages/{package_type}/{package_name}/versions/{package_version_id}"],listDockerMigrationConflictingPackagesForAuthenticatedUser:["GET /user/docker/conflicts"],listDockerMigrationConflictingPackagesForOrganization:["GET /orgs/{org}/docker/conflicts"],listDockerMigrationConflictingPackagesForUser:["GET /users/{username}/docker/conflicts"],listPackagesForAuthenticatedUser:["GET /user/packages"],listPackagesForOrganization:["GET /orgs/{org}/packages"],listPackagesForUser:["GET /users/{username}/packages"],restorePackageForAuthenticatedUser:["POST /user/packages/{package_type}/{package_name}/restore{?token}"],restorePackageForOrg:["POST /orgs/{org}/packages/{package_type}/{package_name}/restore{?token}"],restorePackageForUser:["POST /users/{username}/packages/{package_type}/{package_name}/restore{?token}"],restorePackageVersionForAuthenticatedUser:["POST /user/packages/{package_type}/{package_name}/versions/{package_version_id}/restore"],restorePackageVersionForOrg:["POST /orgs/{org}/packages/{package_type}/{package_name}/versions/{package_version_id}/restore"],restorePackageVersionForUser:["POST /users/{username}/packages/{package_type}/{package_name}/versions/{package_version_id}/restore"]},privateRegistries:{createOrgPrivateRegistry:["POST /orgs/{org}/private-registries"],deleteOrgPrivateRegistry:["DELETE /orgs/{org}/private-registries/{secret_name}"],getOrgPrivateRegistry:["GET /orgs/{org}/private-registries/{secret_name}"],getOrgPublicKey:["GET /orgs/{org}/private-registries/public-key"],listOrgPrivateRegistries:["GET /orgs/{org}/private-registries"],updateOrgPrivateRegistry:["PATCH /orgs/{org}/private-registries/{secret_name}"]},projects:{addCollaborator:["PUT /projects/{project_id}/collaborators/{username}",{},{deprecated:"octokit.rest.projects.addCollaborator() is deprecated, see https://docs.github.com/rest/projects/collaborators#add-project-collaborator"}],createCard:["POST /projects/columns/{column_id}/cards",{},{deprecated:"octokit.rest.projects.createCard() is deprecated, see https://docs.github.com/rest/projects/cards#create-a-project-card"}],createColumn:["POST /projects/{project_id}/columns",{},{deprecated:"octokit.rest.projects.createColumn() is deprecated, see https://docs.github.com/rest/projects/columns#create-a-project-column"}],createForAuthenticatedUser:["POST /user/projects",{},{deprecated:"octokit.rest.projects.createForAuthenticatedUser() is deprecated, see https://docs.github.com/rest/projects/projects#create-a-user-project"}],createForOrg:["POST /orgs/{org}/projects",{},{deprecated:"octokit.rest.projects.createForOrg() is deprecated, see https://docs.github.com/rest/projects/projects#create-an-organization-project"}],createForRepo:["POST /repos/{owner}/{repo}/projects",{},{deprecated:"octokit.rest.projects.createForRepo() is deprecated, see https://docs.github.com/rest/projects/projects#create-a-repository-project"}],delete:["DELETE /projects/{project_id}",{},{deprecated:"octokit.rest.projects.delete() is deprecated, see https://docs.github.com/rest/projects/projects#delete-a-project"}],deleteCard:["DELETE /projects/columns/cards/{card_id}",{},{deprecated:"octokit.rest.projects.deleteCard() is deprecated, see https://docs.github.com/rest/projects/cards#delete-a-project-card"}],deleteColumn:["DELETE /projects/columns/{column_id}",{},{deprecated:"octokit.rest.projects.deleteColumn() is deprecated, see https://docs.github.com/rest/projects/columns#delete-a-project-column"}],get:["GET /projects/{project_id}",{},{deprecated:"octokit.rest.projects.get() is deprecated, see https://docs.github.com/rest/projects/projects#get-a-project"}],getCard:["GET /projects/columns/cards/{card_id}",{},{deprecated:"octokit.rest.projects.getCard() is deprecated, see https://docs.github.com/rest/projects/cards#get-a-project-card"}],getColumn:["GET /projects/columns/{column_id}",{},{deprecated:"octokit.rest.projects.getColumn() is deprecated, see https://docs.github.com/rest/projects/columns#get-a-project-column"}],getPermissionForUser:["GET /projects/{project_id}/collaborators/{username}/permission",{},{deprecated:"octokit.rest.projects.getPermissionForUser() is deprecated, see https://docs.github.com/rest/projects/collaborators#get-project-permission-for-a-user"}],listCards:["GET /projects/columns/{column_id}/cards",{},{deprecated:"octokit.rest.projects.listCards() is deprecated, see https://docs.github.com/rest/projects/cards#list-project-cards"}],listCollaborators:["GET /projects/{project_id}/collaborators",{},{deprecated:"octokit.rest.projects.listCollaborators() is deprecated, see https://docs.github.com/rest/projects/collaborators#list-project-collaborators"}],listColumns:["GET /projects/{project_id}/columns",{},{deprecated:"octokit.rest.projects.listColumns() is deprecated, see https://docs.github.com/rest/projects/columns#list-project-columns"}],listForOrg:["GET /orgs/{org}/projects",{},{deprecated:"octokit.rest.projects.listForOrg() is deprecated, see https://docs.github.com/rest/projects/projects#list-organization-projects"}],listForRepo:["GET /repos/{owner}/{repo}/projects",{},{deprecated:"octokit.rest.projects.listForRepo() is deprecated, see https://docs.github.com/rest/projects/projects#list-repository-projects"}],listForUser:["GET /users/{username}/projects",{},{deprecated:"octokit.rest.projects.listForUser() is deprecated, see https://docs.github.com/rest/projects/projects#list-user-projects"}],moveCard:["POST /projects/columns/cards/{card_id}/moves",{},{deprecated:"octokit.rest.projects.moveCard() is deprecated, see https://docs.github.com/rest/projects/cards#move-a-project-card"}],moveColumn:["POST /projects/columns/{column_id}/moves",{},{deprecated:"octokit.rest.projects.moveColumn() is deprecated, see https://docs.github.com/rest/projects/columns#move-a-project-column"}],removeCollaborator:["DELETE /projects/{project_id}/collaborators/{username}",{},{deprecated:"octokit.rest.projects.removeCollaborator() is deprecated, see https://docs.github.com/rest/projects/collaborators#remove-user-as-a-collaborator"}],update:["PATCH /projects/{project_id}",{},{deprecated:"octokit.rest.projects.update() is deprecated, see https://docs.github.com/rest/projects/projects#update-a-project"}],updateCard:["PATCH /projects/columns/cards/{card_id}",{},{deprecated:"octokit.rest.projects.updateCard() is deprecated, see https://docs.github.com/rest/projects/cards#update-an-existing-project-card"}],updateColumn:["PATCH /projects/columns/{column_id}",{},{deprecated:"octokit.rest.projects.updateColumn() is deprecated, see https://docs.github.com/rest/projects/columns#update-an-existing-project-column"}]},pulls:{checkIfMerged:["GET /repos/{owner}/{repo}/pulls/{pull_number}/merge"],create:["POST /repos/{owner}/{repo}/pulls"],createReplyForReviewComment:["POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies"],createReview:["POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews"],createReviewComment:["POST /repos/{owner}/{repo}/pulls/{pull_number}/comments"],deletePendingReview:["DELETE /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}"],deleteReviewComment:["DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}"],dismissReview:["PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals"],get:["GET /repos/{owner}/{repo}/pulls/{pull_number}"],getReview:["GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}"],getReviewComment:["GET /repos/{owner}/{repo}/pulls/comments/{comment_id}"],list:["GET /repos/{owner}/{repo}/pulls"],listCommentsForReview:["GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/comments"],listCommits:["GET /repos/{owner}/{repo}/pulls/{pull_number}/commits"],listFiles:["GET /repos/{owner}/{repo}/pulls/{pull_number}/files"],listRequestedReviewers:["GET /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"],listReviewComments:["GET /repos/{owner}/{repo}/pulls/{pull_number}/comments"],listReviewCommentsForRepo:["GET /repos/{owner}/{repo}/pulls/comments"],listReviews:["GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews"],merge:["PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge"],removeRequestedReviewers:["DELETE /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"],requestReviewers:["POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers"],submitReview:["POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/events"],update:["PATCH /repos/{owner}/{repo}/pulls/{pull_number}"],updateBranch:["PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch"],updateReview:["PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}"],updateReviewComment:["PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}"]},rateLimit:{get:["GET /rate_limit"]},reactions:{createForCommitComment:["POST /repos/{owner}/{repo}/comments/{comment_id}/reactions"],createForIssue:["POST /repos/{owner}/{repo}/issues/{issue_number}/reactions"],createForIssueComment:["POST /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"],createForPullRequestReviewComment:["POST /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions"],createForRelease:["POST /repos/{owner}/{repo}/releases/{release_id}/reactions"],createForTeamDiscussionCommentInOrg:["POST /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions"],createForTeamDiscussionInOrg:["POST /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions"],deleteForCommitComment:["DELETE /repos/{owner}/{repo}/comments/{comment_id}/reactions/{reaction_id}"],deleteForIssue:["DELETE /repos/{owner}/{repo}/issues/{issue_number}/reactions/{reaction_id}"],deleteForIssueComment:["DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions/{reaction_id}"],deleteForPullRequestComment:["DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions/{reaction_id}"],deleteForRelease:["DELETE /repos/{owner}/{repo}/releases/{release_id}/reactions/{reaction_id}"],deleteForTeamDiscussion:["DELETE /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions/{reaction_id}"],deleteForTeamDiscussionComment:["DELETE /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions/{reaction_id}"],listForCommitComment:["GET /repos/{owner}/{repo}/comments/{comment_id}/reactions"],listForIssue:["GET /repos/{owner}/{repo}/issues/{issue_number}/reactions"],listForIssueComment:["GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"],listForPullRequestReviewComment:["GET /repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions"],listForRelease:["GET /repos/{owner}/{repo}/releases/{release_id}/reactions"],listForTeamDiscussionCommentInOrg:["GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}/reactions"],listForTeamDiscussionInOrg:["GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/reactions"]},repos:{acceptInvitation:["PATCH /user/repository_invitations/{invitation_id}",{},{renamed:["repos","acceptInvitationForAuthenticatedUser"]}],acceptInvitationForAuthenticatedUser:["PATCH /user/repository_invitations/{invitation_id}"],addAppAccessRestrictions:["POST /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps",{},{mapToData:"apps"}],addCollaborator:["PUT /repos/{owner}/{repo}/collaborators/{username}"],addStatusCheckContexts:["POST /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts",{},{mapToData:"contexts"}],addTeamAccessRestrictions:["POST /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams",{},{mapToData:"teams"}],addUserAccessRestrictions:["POST /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users",{},{mapToData:"users"}],cancelPagesDeployment:["POST /repos/{owner}/{repo}/pages/deployments/{pages_deployment_id}/cancel"],checkAutomatedSecurityFixes:["GET /repos/{owner}/{repo}/automated-security-fixes"],checkCollaborator:["GET /repos/{owner}/{repo}/collaborators/{username}"],checkPrivateVulnerabilityReporting:["GET /repos/{owner}/{repo}/private-vulnerability-reporting"],checkVulnerabilityAlerts:["GET /repos/{owner}/{repo}/vulnerability-alerts"],codeownersErrors:["GET /repos/{owner}/{repo}/codeowners/errors"],compareCommits:["GET /repos/{owner}/{repo}/compare/{base}...{head}"],compareCommitsWithBasehead:["GET /repos/{owner}/{repo}/compare/{basehead}"],createAttestation:["POST /repos/{owner}/{repo}/attestations"],createAutolink:["POST /repos/{owner}/{repo}/autolinks"],createCommitComment:["POST /repos/{owner}/{repo}/commits/{commit_sha}/comments"],createCommitSignatureProtection:["POST /repos/{owner}/{repo}/branches/{branch}/protection/required_signatures"],createCommitStatus:["POST /repos/{owner}/{repo}/statuses/{sha}"],createDeployKey:["POST /repos/{owner}/{repo}/keys"],createDeployment:["POST /repos/{owner}/{repo}/deployments"],createDeploymentBranchPolicy:["POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies"],createDeploymentProtectionRule:["POST /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules"],createDeploymentStatus:["POST /repos/{owner}/{repo}/deployments/{deployment_id}/statuses"],createDispatchEvent:["POST /repos/{owner}/{repo}/dispatches"],createForAuthenticatedUser:["POST /user/repos"],createFork:["POST /repos/{owner}/{repo}/forks"],createInOrg:["POST /orgs/{org}/repos"],createOrUpdateCustomPropertiesValues:["PATCH /repos/{owner}/{repo}/properties/values"],createOrUpdateEnvironment:["PUT /repos/{owner}/{repo}/environments/{environment_name}"],createOrUpdateFileContents:["PUT /repos/{owner}/{repo}/contents/{path}"],createOrgRuleset:["POST /orgs/{org}/rulesets"],createPagesDeployment:["POST /repos/{owner}/{repo}/pages/deployments"],createPagesSite:["POST /repos/{owner}/{repo}/pages"],createRelease:["POST /repos/{owner}/{repo}/releases"],createRepoRuleset:["POST /repos/{owner}/{repo}/rulesets"],createUsingTemplate:["POST /repos/{template_owner}/{template_repo}/generate"],createWebhook:["POST /repos/{owner}/{repo}/hooks"],declineInvitation:["DELETE /user/repository_invitations/{invitation_id}",{},{renamed:["repos","declineInvitationForAuthenticatedUser"]}],declineInvitationForAuthenticatedUser:["DELETE /user/repository_invitations/{invitation_id}"],delete:["DELETE /repos/{owner}/{repo}"],deleteAccessRestrictions:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/restrictions"],deleteAdminBranchProtection:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"],deleteAnEnvironment:["DELETE /repos/{owner}/{repo}/environments/{environment_name}"],deleteAutolink:["DELETE /repos/{owner}/{repo}/autolinks/{autolink_id}"],deleteBranchProtection:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection"],deleteCommitComment:["DELETE /repos/{owner}/{repo}/comments/{comment_id}"],deleteCommitSignatureProtection:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/required_signatures"],deleteDeployKey:["DELETE /repos/{owner}/{repo}/keys/{key_id}"],deleteDeployment:["DELETE /repos/{owner}/{repo}/deployments/{deployment_id}"],deleteDeploymentBranchPolicy:["DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"],deleteFile:["DELETE /repos/{owner}/{repo}/contents/{path}"],deleteInvitation:["DELETE /repos/{owner}/{repo}/invitations/{invitation_id}"],deleteOrgRuleset:["DELETE /orgs/{org}/rulesets/{ruleset_id}"],deletePagesSite:["DELETE /repos/{owner}/{repo}/pages"],deletePullRequestReviewProtection:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"],deleteRelease:["DELETE /repos/{owner}/{repo}/releases/{release_id}"],deleteReleaseAsset:["DELETE /repos/{owner}/{repo}/releases/assets/{asset_id}"],deleteRepoRuleset:["DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}"],deleteWebhook:["DELETE /repos/{owner}/{repo}/hooks/{hook_id}"],disableAutomatedSecurityFixes:["DELETE /repos/{owner}/{repo}/automated-security-fixes"],disableDeploymentProtectionRule:["DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"],disablePrivateVulnerabilityReporting:["DELETE /repos/{owner}/{repo}/private-vulnerability-reporting"],disableVulnerabilityAlerts:["DELETE /repos/{owner}/{repo}/vulnerability-alerts"],downloadArchive:["GET /repos/{owner}/{repo}/zipball/{ref}",{},{renamed:["repos","downloadZipballArchive"]}],downloadTarballArchive:["GET /repos/{owner}/{repo}/tarball/{ref}"],downloadZipballArchive:["GET /repos/{owner}/{repo}/zipball/{ref}"],enableAutomatedSecurityFixes:["PUT /repos/{owner}/{repo}/automated-security-fixes"],enablePrivateVulnerabilityReporting:["PUT /repos/{owner}/{repo}/private-vulnerability-reporting"],enableVulnerabilityAlerts:["PUT /repos/{owner}/{repo}/vulnerability-alerts"],generateReleaseNotes:["POST /repos/{owner}/{repo}/releases/generate-notes"],get:["GET /repos/{owner}/{repo}"],getAccessRestrictions:["GET /repos/{owner}/{repo}/branches/{branch}/protection/restrictions"],getAdminBranchProtection:["GET /repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"],getAllDeploymentProtectionRules:["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules"],getAllEnvironments:["GET /repos/{owner}/{repo}/environments"],getAllStatusCheckContexts:["GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts"],getAllTopics:["GET /repos/{owner}/{repo}/topics"],getAppsWithAccessToProtectedBranch:["GET /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps"],getAutolink:["GET /repos/{owner}/{repo}/autolinks/{autolink_id}"],getBranch:["GET /repos/{owner}/{repo}/branches/{branch}"],getBranchProtection:["GET /repos/{owner}/{repo}/branches/{branch}/protection"],getBranchRules:["GET /repos/{owner}/{repo}/rules/branches/{branch}"],getClones:["GET /repos/{owner}/{repo}/traffic/clones"],getCodeFrequencyStats:["GET /repos/{owner}/{repo}/stats/code_frequency"],getCollaboratorPermissionLevel:["GET /repos/{owner}/{repo}/collaborators/{username}/permission"],getCombinedStatusForRef:["GET /repos/{owner}/{repo}/commits/{ref}/status"],getCommit:["GET /repos/{owner}/{repo}/commits/{ref}"],getCommitActivityStats:["GET /repos/{owner}/{repo}/stats/commit_activity"],getCommitComment:["GET /repos/{owner}/{repo}/comments/{comment_id}"],getCommitSignatureProtection:["GET /repos/{owner}/{repo}/branches/{branch}/protection/required_signatures"],getCommunityProfileMetrics:["GET /repos/{owner}/{repo}/community/profile"],getContent:["GET /repos/{owner}/{repo}/contents/{path}"],getContributorsStats:["GET /repos/{owner}/{repo}/stats/contributors"],getCustomDeploymentProtectionRule:["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"],getCustomPropertiesValues:["GET /repos/{owner}/{repo}/properties/values"],getDeployKey:["GET /repos/{owner}/{repo}/keys/{key_id}"],getDeployment:["GET /repos/{owner}/{repo}/deployments/{deployment_id}"],getDeploymentBranchPolicy:["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"],getDeploymentStatus:["GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses/{status_id}"],getEnvironment:["GET /repos/{owner}/{repo}/environments/{environment_name}"],getLatestPagesBuild:["GET /repos/{owner}/{repo}/pages/builds/latest"],getLatestRelease:["GET /repos/{owner}/{repo}/releases/latest"],getOrgRuleSuite:["GET /orgs/{org}/rulesets/rule-suites/{rule_suite_id}"],getOrgRuleSuites:["GET /orgs/{org}/rulesets/rule-suites"],getOrgRuleset:["GET /orgs/{org}/rulesets/{ruleset_id}"],getOrgRulesets:["GET /orgs/{org}/rulesets"],getPages:["GET /repos/{owner}/{repo}/pages"],getPagesBuild:["GET /repos/{owner}/{repo}/pages/builds/{build_id}"],getPagesDeployment:["GET /repos/{owner}/{repo}/pages/deployments/{pages_deployment_id}"],getPagesHealthCheck:["GET /repos/{owner}/{repo}/pages/health"],getParticipationStats:["GET /repos/{owner}/{repo}/stats/participation"],getPullRequestReviewProtection:["GET /repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"],getPunchCardStats:["GET /repos/{owner}/{repo}/stats/punch_card"],getReadme:["GET /repos/{owner}/{repo}/readme"],getReadmeInDirectory:["GET /repos/{owner}/{repo}/readme/{dir}"],getRelease:["GET /repos/{owner}/{repo}/releases/{release_id}"],getReleaseAsset:["GET /repos/{owner}/{repo}/releases/assets/{asset_id}"],getReleaseByTag:["GET /repos/{owner}/{repo}/releases/tags/{tag}"],getRepoRuleSuite:["GET /repos/{owner}/{repo}/rulesets/rule-suites/{rule_suite_id}"],getRepoRuleSuites:["GET /repos/{owner}/{repo}/rulesets/rule-suites"],getRepoRuleset:["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"],getRepoRulesetHistory:["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}/history"],getRepoRulesetVersion:["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}/history/{version_id}"],getRepoRulesets:["GET /repos/{owner}/{repo}/rulesets"],getStatusChecksProtection:["GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"],getTeamsWithAccessToProtectedBranch:["GET /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams"],getTopPaths:["GET /repos/{owner}/{repo}/traffic/popular/paths"],getTopReferrers:["GET /repos/{owner}/{repo}/traffic/popular/referrers"],getUsersWithAccessToProtectedBranch:["GET /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users"],getViews:["GET /repos/{owner}/{repo}/traffic/views"],getWebhook:["GET /repos/{owner}/{repo}/hooks/{hook_id}"],getWebhookConfigForRepo:["GET /repos/{owner}/{repo}/hooks/{hook_id}/config"],getWebhookDelivery:["GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}"],listActivities:["GET /repos/{owner}/{repo}/activity"],listAttestations:["GET /repos/{owner}/{repo}/attestations/{subject_digest}"],listAutolinks:["GET /repos/{owner}/{repo}/autolinks"],listBranches:["GET /repos/{owner}/{repo}/branches"],listBranchesForHeadCommit:["GET /repos/{owner}/{repo}/commits/{commit_sha}/branches-where-head"],listCollaborators:["GET /repos/{owner}/{repo}/collaborators"],listCommentsForCommit:["GET /repos/{owner}/{repo}/commits/{commit_sha}/comments"],listCommitCommentsForRepo:["GET /repos/{owner}/{repo}/comments"],listCommitStatusesForRef:["GET /repos/{owner}/{repo}/commits/{ref}/statuses"],listCommits:["GET /repos/{owner}/{repo}/commits"],listContributors:["GET /repos/{owner}/{repo}/contributors"],listCustomDeploymentRuleIntegrations:["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps"],listDeployKeys:["GET /repos/{owner}/{repo}/keys"],listDeploymentBranchPolicies:["GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies"],listDeploymentStatuses:["GET /repos/{owner}/{repo}/deployments/{deployment_id}/statuses"],listDeployments:["GET /repos/{owner}/{repo}/deployments"],listForAuthenticatedUser:["GET /user/repos"],listForOrg:["GET /orgs/{org}/repos"],listForUser:["GET /users/{username}/repos"],listForks:["GET /repos/{owner}/{repo}/forks"],listInvitations:["GET /repos/{owner}/{repo}/invitations"],listInvitationsForAuthenticatedUser:["GET /user/repository_invitations"],listLanguages:["GET /repos/{owner}/{repo}/languages"],listPagesBuilds:["GET /repos/{owner}/{repo}/pages/builds"],listPublic:["GET /repositories"],listPullRequestsAssociatedWithCommit:["GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls"],listReleaseAssets:["GET /repos/{owner}/{repo}/releases/{release_id}/assets"],listReleases:["GET /repos/{owner}/{repo}/releases"],listTags:["GET /repos/{owner}/{repo}/tags"],listTeams:["GET /repos/{owner}/{repo}/teams"],listWebhookDeliveries:["GET /repos/{owner}/{repo}/hooks/{hook_id}/deliveries"],listWebhooks:["GET /repos/{owner}/{repo}/hooks"],merge:["POST /repos/{owner}/{repo}/merges"],mergeUpstream:["POST /repos/{owner}/{repo}/merge-upstream"],pingWebhook:["POST /repos/{owner}/{repo}/hooks/{hook_id}/pings"],redeliverWebhookDelivery:["POST /repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts"],removeAppAccessRestrictions:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps",{},{mapToData:"apps"}],removeCollaborator:["DELETE /repos/{owner}/{repo}/collaborators/{username}"],removeStatusCheckContexts:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts",{},{mapToData:"contexts"}],removeStatusCheckProtection:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"],removeTeamAccessRestrictions:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams",{},{mapToData:"teams"}],removeUserAccessRestrictions:["DELETE /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users",{},{mapToData:"users"}],renameBranch:["POST /repos/{owner}/{repo}/branches/{branch}/rename"],replaceAllTopics:["PUT /repos/{owner}/{repo}/topics"],requestPagesBuild:["POST /repos/{owner}/{repo}/pages/builds"],setAdminBranchProtection:["POST /repos/{owner}/{repo}/branches/{branch}/protection/enforce_admins"],setAppAccessRestrictions:["PUT /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/apps",{},{mapToData:"apps"}],setStatusCheckContexts:["PUT /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks/contexts",{},{mapToData:"contexts"}],setTeamAccessRestrictions:["PUT /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/teams",{},{mapToData:"teams"}],setUserAccessRestrictions:["PUT /repos/{owner}/{repo}/branches/{branch}/protection/restrictions/users",{},{mapToData:"users"}],testPushWebhook:["POST /repos/{owner}/{repo}/hooks/{hook_id}/tests"],transfer:["POST /repos/{owner}/{repo}/transfer"],update:["PATCH /repos/{owner}/{repo}"],updateBranchProtection:["PUT /repos/{owner}/{repo}/branches/{branch}/protection"],updateCommitComment:["PATCH /repos/{owner}/{repo}/comments/{comment_id}"],updateDeploymentBranchPolicy:["PUT /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}"],updateInformationAboutPagesSite:["PUT /repos/{owner}/{repo}/pages"],updateInvitation:["PATCH /repos/{owner}/{repo}/invitations/{invitation_id}"],updateOrgRuleset:["PUT /orgs/{org}/rulesets/{ruleset_id}"],updatePullRequestReviewProtection:["PATCH /repos/{owner}/{repo}/branches/{branch}/protection/required_pull_request_reviews"],updateRelease:["PATCH /repos/{owner}/{repo}/releases/{release_id}"],updateReleaseAsset:["PATCH /repos/{owner}/{repo}/releases/assets/{asset_id}"],updateRepoRuleset:["PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"],updateStatusCheckPotection:["PATCH /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",{},{renamed:["repos","updateStatusCheckProtection"]}],updateStatusCheckProtection:["PATCH /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks"],updateWebhook:["PATCH /repos/{owner}/{repo}/hooks/{hook_id}"],updateWebhookConfigForRepo:["PATCH /repos/{owner}/{repo}/hooks/{hook_id}/config"],uploadReleaseAsset:["POST /repos/{owner}/{repo}/releases/{release_id}/assets{?name,label}",{baseUrl:"https://uploads.github.com"}]},search:{code:["GET /search/code"],commits:["GET /search/commits"],issuesAndPullRequests:["GET /search/issues",{},{deprecated:"octokit.rest.search.issuesAndPullRequests() is deprecated, see https://docs.github.com/rest/search/search#search-issues-and-pull-requests"}],labels:["GET /search/labels"],repos:["GET /search/repositories"],topics:["GET /search/topics"],users:["GET /search/users"]},secretScanning:{createPushProtectionBypass:["POST /repos/{owner}/{repo}/secret-scanning/push-protection-bypasses"],getAlert:["GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"],getScanHistory:["GET /repos/{owner}/{repo}/secret-scanning/scan-history"],listAlertsForEnterprise:["GET /enterprises/{enterprise}/secret-scanning/alerts"],listAlertsForOrg:["GET /orgs/{org}/secret-scanning/alerts"],listAlertsForRepo:["GET /repos/{owner}/{repo}/secret-scanning/alerts"],listLocationsForAlert:["GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations"],updateAlert:["PATCH /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"]},securityAdvisories:{createFork:["POST /repos/{owner}/{repo}/security-advisories/{ghsa_id}/forks"],createPrivateVulnerabilityReport:["POST /repos/{owner}/{repo}/security-advisories/reports"],createRepositoryAdvisory:["POST /repos/{owner}/{repo}/security-advisories"],createRepositoryAdvisoryCveRequest:["POST /repos/{owner}/{repo}/security-advisories/{ghsa_id}/cve"],getGlobalAdvisory:["GET /advisories/{ghsa_id}"],getRepositoryAdvisory:["GET /repos/{owner}/{repo}/security-advisories/{ghsa_id}"],listGlobalAdvisories:["GET /advisories"],listOrgRepositoryAdvisories:["GET /orgs/{org}/security-advisories"],listRepositoryAdvisories:["GET /repos/{owner}/{repo}/security-advisories"],updateRepositoryAdvisory:["PATCH /repos/{owner}/{repo}/security-advisories/{ghsa_id}"]},teams:{addOrUpdateMembershipForUserInOrg:["PUT /orgs/{org}/teams/{team_slug}/memberships/{username}"],addOrUpdateProjectPermissionsInOrg:["PUT /orgs/{org}/teams/{team_slug}/projects/{project_id}",{},{deprecated:"octokit.rest.teams.addOrUpdateProjectPermissionsInOrg() is deprecated, see https://docs.github.com/rest/teams/teams#add-or-update-team-project-permissions"}],addOrUpdateProjectPermissionsLegacy:["PUT /teams/{team_id}/projects/{project_id}",{},{deprecated:"octokit.rest.teams.addOrUpdateProjectPermissionsLegacy() is deprecated, see https://docs.github.com/rest/teams/teams#add-or-update-team-project-permissions-legacy"}],addOrUpdateRepoPermissionsInOrg:["PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}"],checkPermissionsForProjectInOrg:["GET /orgs/{org}/teams/{team_slug}/projects/{project_id}",{},{deprecated:"octokit.rest.teams.checkPermissionsForProjectInOrg() is deprecated, see https://docs.github.com/rest/teams/teams#check-team-permissions-for-a-project"}],checkPermissionsForProjectLegacy:["GET /teams/{team_id}/projects/{project_id}",{},{deprecated:"octokit.rest.teams.checkPermissionsForProjectLegacy() is deprecated, see https://docs.github.com/rest/teams/teams#check-team-permissions-for-a-project-legacy"}],checkPermissionsForRepoInOrg:["GET /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}"],create:["POST /orgs/{org}/teams"],createDiscussionCommentInOrg:["POST /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments"],createDiscussionInOrg:["POST /orgs/{org}/teams/{team_slug}/discussions"],deleteDiscussionCommentInOrg:["DELETE /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}"],deleteDiscussionInOrg:["DELETE /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}"],deleteInOrg:["DELETE /orgs/{org}/teams/{team_slug}"],getByName:["GET /orgs/{org}/teams/{team_slug}"],getDiscussionCommentInOrg:["GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}"],getDiscussionInOrg:["GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}"],getMembershipForUserInOrg:["GET /orgs/{org}/teams/{team_slug}/memberships/{username}"],list:["GET /orgs/{org}/teams"],listChildInOrg:["GET /orgs/{org}/teams/{team_slug}/teams"],listDiscussionCommentsInOrg:["GET /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments"],listDiscussionsInOrg:["GET /orgs/{org}/teams/{team_slug}/discussions"],listForAuthenticatedUser:["GET /user/teams"],listMembersInOrg:["GET /orgs/{org}/teams/{team_slug}/members"],listPendingInvitationsInOrg:["GET /orgs/{org}/teams/{team_slug}/invitations"],listProjectsInOrg:["GET /orgs/{org}/teams/{team_slug}/projects",{},{deprecated:"octokit.rest.teams.listProjectsInOrg() is deprecated, see https://docs.github.com/rest/teams/teams#list-team-projects"}],listProjectsLegacy:["GET /teams/{team_id}/projects",{},{deprecated:"octokit.rest.teams.listProjectsLegacy() is deprecated, see https://docs.github.com/rest/teams/teams#list-team-projects-legacy"}],listReposInOrg:["GET /orgs/{org}/teams/{team_slug}/repos"],removeMembershipForUserInOrg:["DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}"],removeProjectInOrg:["DELETE /orgs/{org}/teams/{team_slug}/projects/{project_id}",{},{deprecated:"octokit.rest.teams.removeProjectInOrg() is deprecated, see https://docs.github.com/rest/teams/teams#remove-a-project-from-a-team"}],removeProjectLegacy:["DELETE /teams/{team_id}/projects/{project_id}",{},{deprecated:"octokit.rest.teams.removeProjectLegacy() is deprecated, see https://docs.github.com/rest/teams/teams#remove-a-project-from-a-team-legacy"}],removeRepoInOrg:["DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}"],updateDiscussionCommentInOrg:["PATCH /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}/comments/{comment_number}"],updateDiscussionInOrg:["PATCH /orgs/{org}/teams/{team_slug}/discussions/{discussion_number}"],updateInOrg:["PATCH /orgs/{org}/teams/{team_slug}"]},users:{addEmailForAuthenticated:["POST /user/emails",{},{renamed:["users","addEmailForAuthenticatedUser"]}],addEmailForAuthenticatedUser:["POST /user/emails"],addSocialAccountForAuthenticatedUser:["POST /user/social_accounts"],block:["PUT /user/blocks/{username}"],checkBlocked:["GET /user/blocks/{username}"],checkFollowingForUser:["GET /users/{username}/following/{target_user}"],checkPersonIsFollowedByAuthenticated:["GET /user/following/{username}"],createGpgKeyForAuthenticated:["POST /user/gpg_keys",{},{renamed:["users","createGpgKeyForAuthenticatedUser"]}],createGpgKeyForAuthenticatedUser:["POST /user/gpg_keys"],createPublicSshKeyForAuthenticated:["POST /user/keys",{},{renamed:["users","createPublicSshKeyForAuthenticatedUser"]}],createPublicSshKeyForAuthenticatedUser:["POST /user/keys"],createSshSigningKeyForAuthenticatedUser:["POST /user/ssh_signing_keys"],deleteEmailForAuthenticated:["DELETE /user/emails",{},{renamed:["users","deleteEmailForAuthenticatedUser"]}],deleteEmailForAuthenticatedUser:["DELETE /user/emails"],deleteGpgKeyForAuthenticated:["DELETE /user/gpg_keys/{gpg_key_id}",{},{renamed:["users","deleteGpgKeyForAuthenticatedUser"]}],deleteGpgKeyForAuthenticatedUser:["DELETE /user/gpg_keys/{gpg_key_id}"],deletePublicSshKeyForAuthenticated:["DELETE /user/keys/{key_id}",{},{renamed:["users","deletePublicSshKeyForAuthenticatedUser"]}],deletePublicSshKeyForAuthenticatedUser:["DELETE /user/keys/{key_id}"],deleteSocialAccountForAuthenticatedUser:["DELETE /user/social_accounts"],deleteSshSigningKeyForAuthenticatedUser:["DELETE /user/ssh_signing_keys/{ssh_signing_key_id}"],follow:["PUT /user/following/{username}"],getAuthenticated:["GET /user"],getById:["GET /user/{account_id}"],getByUsername:["GET /users/{username}"],getContextForUser:["GET /users/{username}/hovercard"],getGpgKeyForAuthenticated:["GET /user/gpg_keys/{gpg_key_id}",{},{renamed:["users","getGpgKeyForAuthenticatedUser"]}],getGpgKeyForAuthenticatedUser:["GET /user/gpg_keys/{gpg_key_id}"],getPublicSshKeyForAuthenticated:["GET /user/keys/{key_id}",{},{renamed:["users","getPublicSshKeyForAuthenticatedUser"]}],getPublicSshKeyForAuthenticatedUser:["GET /user/keys/{key_id}"],getSshSigningKeyForAuthenticatedUser:["GET /user/ssh_signing_keys/{ssh_signing_key_id}"],list:["GET /users"],listAttestations:["GET /users/{username}/attestations/{subject_digest}"],listBlockedByAuthenticated:["GET /user/blocks",{},{renamed:["users","listBlockedByAuthenticatedUser"]}],listBlockedByAuthenticatedUser:["GET /user/blocks"],listEmailsForAuthenticated:["GET /user/emails",{},{renamed:["users","listEmailsForAuthenticatedUser"]}],listEmailsForAuthenticatedUser:["GET /user/emails"],listFollowedByAuthenticated:["GET /user/following",{},{renamed:["users","listFollowedByAuthenticatedUser"]}],listFollowedByAuthenticatedUser:["GET /user/following"],listFollowersForAuthenticatedUser:["GET /user/followers"],listFollowersForUser:["GET /users/{username}/followers"],listFollowingForUser:["GET /users/{username}/following"],listGpgKeysForAuthenticated:["GET /user/gpg_keys",{},{renamed:["users","listGpgKeysForAuthenticatedUser"]}],listGpgKeysForAuthenticatedUser:["GET /user/gpg_keys"],listGpgKeysForUser:["GET /users/{username}/gpg_keys"],listPublicEmailsForAuthenticated:["GET /user/public_emails",{},{renamed:["users","listPublicEmailsForAuthenticatedUser"]}],listPublicEmailsForAuthenticatedUser:["GET /user/public_emails"],listPublicKeysForUser:["GET /users/{username}/keys"],listPublicSshKeysForAuthenticated:["GET /user/keys",{},{renamed:["users","listPublicSshKeysForAuthenticatedUser"]}],listPublicSshKeysForAuthenticatedUser:["GET /user/keys"],listSocialAccountsForAuthenticatedUser:["GET /user/social_accounts"],listSocialAccountsForUser:["GET /users/{username}/social_accounts"],listSshSigningKeysForAuthenticatedUser:["GET /user/ssh_signing_keys"],listSshSigningKeysForUser:["GET /users/{username}/ssh_signing_keys"],setPrimaryEmailVisibilityForAuthenticated:["PATCH /user/email/visibility",{},{renamed:["users","setPrimaryEmailVisibilityForAuthenticatedUser"]}],setPrimaryEmailVisibilityForAuthenticatedUser:["PATCH /user/email/visibility"],unblock:["DELETE /user/blocks/{username}"],unfollow:["DELETE /user/following/{username}"],updateAuthenticated:["PATCH /user"]}};var ah=oh;const yr=new Map;for(const[r,e]of Object.entries(ah))for(const[t,s]of Object.entries(e)){const[i,o,n]=s,[a,u]=i.split(/ /),h=Object.assign({method:a,url:u},o);yr.has(r)||yr.set(r,new Map),yr.get(r).set(t,{scope:r,methodName:t,endpointDefaults:h,decorations:n})}const lh={has({scope:r},e){return yr.get(r).has(e)},getOwnPropertyDescriptor(r,e){return{value:this.get(r,e),configurable:!0,writable:!0,enumerable:!0}},defineProperty(r,e,t){return Object.defineProperty(r.cache,e,t),!0},deleteProperty(r,e){return delete r.cache[e],!0},ownKeys({scope:r}){return[...yr.get(r).keys()]},set(r,e,t){return r.cache[e]=t},get({octokit:r,scope:e,cache:t},s){if(t[s])return t[s];const i=yr.get(e).get(s);if(!i)return;const{endpointDefaults:o,decorations:n}=i;return n?t[s]=uh(r,e,s,o,n):t[s]=r.request.defaults(o),t[s]}};function ch(r){const e={};for(const t of yr.keys())e[t]=new Proxy({octokit:r,scope:t,cache:{}},lh);return e}function uh(r,e,t,s,i){const o=r.request.defaults(s);function n(...a){let u=o.endpoint.merge(...a);if(i.mapToData)return u=Object.assign({},u,{data:u[i.mapToData],[i.mapToData]:void 0}),o(u);if(i.renamed){const[h,p]=i.renamed;r.log.warn(`octokit.${e}.${t}() has been renamed to octokit.${h}.${p}()`)}if(i.deprecated&&r.log.warn(i.deprecated),i.renamedParameters){const h=o.endpoint.merge(...a);for(const[p,d]of Object.entries(i.renamedParameters))p in h&&(r.log.warn(`"${p}" parameter is deprecated for "octokit.${e}.${t}()". Use "${d}" instead`),d in h||(h[d]=h[p]),delete h[p]);return o(h)}return o(...a)}return Object.assign(n,o)}function na(r){const e=ch(r);return{...e,rest:e}}na.VERSION=nh;const hh="21.1.1",oa=th.plugin(ta,na,ia).defaults({userAgent:`octokit-rest.js/${hh}`});var Je={},ot={},_t={};(function(r){Object.defineProperty(r,"__esModule",{value:!0});var e=Object.prototype.hasOwnProperty;r.has=function(d,f){return e.call(d,f)};function t(d,f){return d<f?-1:d===f?0:1}r.defaultCompare=t;function s(d,f){return d===f}r.defaultEquals=s;function i(d){return d===null?"COLLECTION_NULL":a(d)?"COLLECTION_UNDEFINED":u(d)?"$s"+d:"$o"+d.toString()}r.defaultToString=i;function o(d,f){if(f===void 0&&(f=","),d===null)return"COLLECTION_NULL";if(a(d))return"COLLECTION_UNDEFINED";if(u(d))return d.toString();var y="{",w=!0;for(var v in d)r.has(d,v)&&(w?w=!1:y=y+f,y=y+v+":"+d[v]);return y+"}"}r.makeString=o;function n(d){return typeof d=="function"}r.isFunction=n;function a(d){return typeof d>"u"}r.isUndefined=a;function u(d){return Object.prototype.toString.call(d)==="[object String]"}r.isString=u;function h(d){return a(d)||!n(d)?function(f,y){return f<y?1:f===y?0:-1}:function(f,y){return d(f,y)*-1}}r.reverseCompareFunction=h;function p(d){return function(f,y){return d(f,y)===0}}r.compareToEquals=p})(_t);Object.defineProperty(ot,"__esModule",{value:!0});var ti=_t;function mn(r,e,t){for(var s=t||ti.defaultEquals,i=r.length,o=0;o<i;o++)if(s(r[o],e))return o;return-1}ot.indexOf=mn;function ph(r,e,t){for(var s=t||ti.defaultEquals,i=r.length,o=i-1;o>=0;o--)if(s(r[o],e))return o;return-1}ot.lastIndexOf=ph;function dh(r,e,t){return mn(r,e,t)>=0}ot.contains=dh;function mh(r,e,t){var s=mn(r,e,t);return s<0?!1:(r.splice(s,1),!0)}ot.remove=mh;function fh(r,e,t){for(var s=t||ti.defaultEquals,i=r.length,o=0,n=0;n<i;n++)s(r[n],e)&&o++;return o}ot.frequency=fh;function gh(r,e,t){var s=t||ti.defaultEquals;if(r.length!==e.length)return!1;for(var i=r.length,o=0;o<i;o++)if(!s(r[o],e[o]))return!1;return!0}ot.equals=gh;function yh(r){return r.concat()}ot.copy=yh;function wh(r,e,t){if(e<0||e>=r.length||t<0||t>=r.length)return!1;var s=r[e];return r[e]=r[t],r[t]=s,!0}ot.swap=wh;function bh(r){return"["+r.toString()+"]"}ot.toString=bh;function _h(r,e){for(var t=0,s=r;t<s.length;t++){var i=s[t];if(e(i)===!1)return}}ot.forEach=_h;var fn={},ar={};Object.defineProperty(ar,"__esModule",{value:!0});var Nt=_t,Eh=function(){function r(e){this.table={},this.nElements=0,this.toStr=e||Nt.defaultToString}return r.prototype.getValue=function(e){var t=this.table["$"+this.toStr(e)];if(!Nt.isUndefined(t))return t.value},r.prototype.setValue=function(e,t){if(!(Nt.isUndefined(e)||Nt.isUndefined(t))){var s,i="$"+this.toStr(e),o=this.table[i];return Nt.isUndefined(o)?(this.nElements++,s=void 0):s=o.value,this.table[i]={key:e,value:t},s}},r.prototype.remove=function(e){var t="$"+this.toStr(e),s=this.table[t];if(!Nt.isUndefined(s))return delete this.table[t],this.nElements--,s.value},r.prototype.keys=function(){var e=[];for(var t in this.table)if(Nt.has(this.table,t)){var s=this.table[t];e.push(s.key)}return e},r.prototype.values=function(){var e=[];for(var t in this.table)if(Nt.has(this.table,t)){var s=this.table[t];e.push(s.value)}return e},r.prototype.forEach=function(e){for(var t in this.table)if(Nt.has(this.table,t)){var s=this.table[t],i=e(s.key,s.value);if(i===!1)return}},r.prototype.containsKey=function(e){return!Nt.isUndefined(this.getValue(e))},r.prototype.clear=function(){this.table={},this.nElements=0},r.prototype.size=function(){return this.nElements},r.prototype.isEmpty=function(){return this.nElements<=0},r.prototype.toString=function(){var e="{";return this.forEach(function(t,s){e+=`
-	`+t+" : "+s}),e+`
-}`},r}();ar.default=Eh;var ri={};Object.defineProperty(ri,"__esModule",{value:!0});var Th=_t,vh=ot,Ch=ar,kh=function(){function r(e){this.dictionary=new Ch.default(e)}return r.prototype.contains=function(e){return this.dictionary.containsKey(e)},r.prototype.add=function(e){return this.contains(e)||Th.isUndefined(e)?!1:(this.dictionary.setValue(e,e),!0)},r.prototype.intersection=function(e){var t=this;this.forEach(function(s){return e.contains(s)||t.remove(s),!0})},r.prototype.union=function(e){var t=this;e.forEach(function(s){return t.add(s),!0})},r.prototype.difference=function(e){var t=this;e.forEach(function(s){return t.remove(s),!0})},r.prototype.isSubsetOf=function(e){if(this.size()>e.size())return!1;var t=!0;return this.forEach(function(s){return e.contains(s)?!0:(t=!1,!1)}),t},r.prototype.remove=function(e){return this.contains(e)?(this.dictionary.remove(e),!0):!1},r.prototype.forEach=function(e){this.dictionary.forEach(function(t,s){return e(s)})},r.prototype.toArray=function(){return this.dictionary.values()},r.prototype.isEmpty=function(){return this.dictionary.isEmpty()},r.prototype.size=function(){return this.dictionary.size()},r.prototype.clear=function(){this.dictionary.clear()},r.prototype.toString=function(){return vh.toString(this.toArray())},r}();ri.default=kh;Object.defineProperty(fn,"__esModule",{value:!0});var Fi=_t,Sh=ar,Fh=ri,Ph=function(){function r(e){this.toStrF=e||Fi.defaultToString,this.dictionary=new Sh.default(this.toStrF),this.nElements=0}return r.prototype.add=function(e,t){if(t===void 0&&(t=1),Fi.isUndefined(e)||t<=0)return!1;if(this.contains(e))this.dictionary.getValue(e).copies+=t;else{var s={value:e,copies:t};this.dictionary.setValue(e,s)}return this.nElements+=t,!0},r.prototype.count=function(e){return this.contains(e)?this.dictionary.getValue(e).copies:0},r.prototype.contains=function(e){return this.dictionary.containsKey(e)},r.prototype.remove=function(e,t){if(t===void 0&&(t=1),Fi.isUndefined(e)||t<=0)return!1;if(this.contains(e)){var s=this.dictionary.getValue(e);return t>s.copies?this.nElements-=s.copies:this.nElements-=t,s.copies-=t,s.copies<=0&&this.dictionary.remove(e),!0}else return!1},r.prototype.toArray=function(){for(var e=[],t=this.dictionary.values(),s=0,i=t;s<i.length;s++)for(var o=i[s],n=o.value,a=o.copies,u=0;u<a;u++)e.push(n);return e},r.prototype.toSet=function(){for(var e=new Fh.default(this.toStrF),t=this.dictionary.values(),s=0,i=t;s<i.length;s++){var o=i[s],n=o.value;e.add(n)}return e},r.prototype.forEach=function(e){this.dictionary.forEach(function(t,s){for(var i=s.value,o=s.copies,n=0;n<o;n++)if(e(i)===!1)return!1;return!0})},r.prototype.size=function(){return this.nElements},r.prototype.isEmpty=function(){return this.nElements===0},r.prototype.clear=function(){this.nElements=0,this.dictionary.clear()},r}();fn.default=Ph;var gn={},si={},ii={},bs={};Object.defineProperty(bs,"__esModule",{value:!0});var pr=_t,Ah=ot,Oh=function(){function r(){this.firstNode=null,this.lastNode=null,this.nElements=0}return r.prototype.add=function(e,t){if(pr.isUndefined(t)&&(t=this.nElements),t<0||t>this.nElements||pr.isUndefined(e))return!1;var s=this.createNode(e);if(this.nElements===0||this.lastNode===null)this.firstNode=s,this.lastNode=s;else if(t===this.nElements)this.lastNode.next=s,this.lastNode=s;else if(t===0)s.next=this.firstNode,this.firstNode=s;else{var i=this.nodeAtIndex(t-1);if(i===null)return!1;s.next=i.next,i.next=s}return this.nElements++,!0},r.prototype.first=function(){if(this.firstNode!==null)return this.firstNode.element},r.prototype.last=function(){if(this.lastNode!==null)return this.lastNode.element},r.prototype.elementAtIndex=function(e){var t=this.nodeAtIndex(e);if(t!==null)return t.element},r.prototype.indexOf=function(e,t){var s=t||pr.defaultEquals;if(pr.isUndefined(e))return-1;for(var i=this.firstNode,o=0;i!==null;){if(s(i.element,e))return o;o++,i=i.next}return-1},r.prototype.contains=function(e,t){return this.indexOf(e,t)>=0},r.prototype.remove=function(e,t){var s=t||pr.defaultEquals;if(this.nElements<1||pr.isUndefined(e))return!1;for(var i=null,o=this.firstNode;o!==null;){if(s(o.element,e))return i===null?(this.firstNode=o.next,o===this.lastNode&&(this.lastNode=null)):o===this.lastNode?(this.lastNode=i,i.next=o.next,o.next=null):(i.next=o.next,o.next=null),this.nElements--,!0;i=o,o=o.next}return!1},r.prototype.clear=function(){this.firstNode=null,this.lastNode=null,this.nElements=0},r.prototype.equals=function(e,t){var s=t||pr.defaultEquals;return!(e instanceof r)||this.size()!==e.size()?!1:this.equalsAux(this.firstNode,e.firstNode,s)},r.prototype.equalsAux=function(e,t,s){for(;e!==null&&t!==null;){if(!s(e.element,t.element))return!1;e=e.next,t=t.next}return!0},r.prototype.removeElementAtIndex=function(e){if(!(e<0||e>=this.nElements||this.firstNode===null||this.lastNode===null)){var t;if(this.nElements===1)t=this.firstNode.element,this.firstNode=null,this.lastNode=null;else{var s=this.nodeAtIndex(e-1);s===null?(t=this.firstNode.element,this.firstNode=this.firstNode.next):s.next===this.lastNode&&(t=this.lastNode.element,this.lastNode=s),s!==null&&s.next!==null&&(t=s.next.element,s.next=s.next.next)}return this.nElements--,t}},r.prototype.forEach=function(e){for(var t=this.firstNode;t!==null&&e(t.element)!==!1;)t=t.next},r.prototype.reverse=function(){for(var e=null,t=this.firstNode,s=null;t!==null;)s=t.next,t.next=e,e=t,t=s;s=this.firstNode,this.firstNode=this.lastNode,this.lastNode=s},r.prototype.toArray=function(){for(var e=[],t=this.firstNode;t!==null;)e.push(t.element),t=t.next;return e},r.prototype.size=function(){return this.nElements},r.prototype.isEmpty=function(){return this.nElements<=0},r.prototype.toString=function(){return Ah.toString(this.toArray())},r.prototype.nodeAtIndex=function(e){if(e<0||e>=this.nElements)return null;if(e===this.nElements-1)return this.lastNode;for(var t=this.firstNode,s=0;s<e&&t!==null;s++)t=t.next;return t},r.prototype.createNode=function(e){return{element:e,next:null}},r}();bs.default=Oh;Object.defineProperty(ii,"__esModule",{value:!0});var Rh=bs,Dh=function(){function r(){this.list=new Rh.default}return r.prototype.enqueue=function(e){return this.list.add(e)},r.prototype.add=function(e){return this.list.add(e)},r.prototype.dequeue=function(){if(this.list.size()!==0){var e=this.list.first();return this.list.removeElementAtIndex(0),e}},r.prototype.peek=function(){if(this.list.size()!==0)return this.list.first()},r.prototype.size=function(){return this.list.size()},r.prototype.contains=function(e,t){return this.list.contains(e,t)},r.prototype.isEmpty=function(){return this.list.size()<=0},r.prototype.clear=function(){this.list.clear()},r.prototype.forEach=function(e){this.list.forEach(e)},r}();ii.default=Dh;Object.defineProperty(si,"__esModule",{value:!0});var Pi=_t,Gh=ii,Uh=function(){function r(e){this.root=null,this.compare=e||Pi.defaultCompare,this.nElements=0}return r.prototype.add=function(e){return Pi.isUndefined(e)?!1:this.insertNode(this.createNode(e))!==null?(this.nElements++,!0):!1},r.prototype.clear=function(){this.root=null,this.nElements=0},r.prototype.isEmpty=function(){return this.nElements===0},r.prototype.size=function(){return this.nElements},r.prototype.contains=function(e){return Pi.isUndefined(e)?!1:this.searchNode(this.root,e)!==null},r.prototype.search=function(e){var t=this.searchNode(this.root,e);if(t!==null)return t.element},r.prototype.remove=function(e){var t=this.searchNode(this.root,e);return t===null?!1:(this.removeNode(t),this.nElements--,!0)},r.prototype.inorderTraversal=function(e){this.inorderTraversalAux(this.root,e,{stop:!1})},r.prototype.preorderTraversal=function(e){this.preorderTraversalAux(this.root,e,{stop:!1})},r.prototype.postorderTraversal=function(e){this.postorderTraversalAux(this.root,e,{stop:!1})},r.prototype.levelTraversal=function(e){this.levelTraversalAux(this.root,e)},r.prototype.minimum=function(){if(!(this.isEmpty()||this.root===null))return this.minimumAux(this.root).element},r.prototype.maximum=function(){if(!(this.isEmpty()||this.root===null))return this.maximumAux(this.root).element},r.prototype.forEach=function(e){this.inorderTraversal(e)},r.prototype.toArray=function(){var e=[];return this.inorderTraversal(function(t){return e.push(t),!0}),e},r.prototype.height=function(){return this.heightAux(this.root)},r.prototype.searchNode=function(e,t){for(var s=1;e!==null&&s!==0;)s=this.compare(t,e.element),s<0?e=e.leftCh:s>0&&(e=e.rightCh);return e},r.prototype.transplant=function(e,t){e.parent===null?this.root=t:e===e.parent.leftCh?e.parent.leftCh=t:e.parent.rightCh=t,t!==null&&(t.parent=e.parent)},r.prototype.removeNode=function(e){if(e.leftCh===null)this.transplant(e,e.rightCh);else if(e.rightCh===null)this.transplant(e,e.leftCh);else{var t=this.minimumAux(e.rightCh);t.parent!==e&&(this.transplant(t,t.rightCh),t.rightCh=e.rightCh,t.rightCh.parent=t),this.transplant(e,t),t.leftCh=e.leftCh,t.leftCh.parent=t}},r.prototype.inorderTraversalAux=function(e,t,s){e===null||s.stop||(this.inorderTraversalAux(e.leftCh,t,s),!s.stop&&(s.stop=t(e.element)===!1,!s.stop&&this.inorderTraversalAux(e.rightCh,t,s)))},r.prototype.levelTraversalAux=function(e,t){var s=new Gh.default;for(e!==null&&s.enqueue(e),e=s.dequeue()||null;e!=null;){if(t(e.element)===!1)return;e.leftCh!==null&&s.enqueue(e.leftCh),e.rightCh!==null&&s.enqueue(e.rightCh),e=s.dequeue()||null}},r.prototype.preorderTraversalAux=function(e,t,s){e===null||s.stop||(s.stop=t(e.element)===!1,!s.stop&&(this.preorderTraversalAux(e.leftCh,t,s),!s.stop&&this.preorderTraversalAux(e.rightCh,t,s)))},r.prototype.postorderTraversalAux=function(e,t,s){e===null||s.stop||(this.postorderTraversalAux(e.leftCh,t,s),!s.stop&&(this.postorderTraversalAux(e.rightCh,t,s),!s.stop&&(s.stop=t(e.element)===!1)))},r.prototype.minimumAux=function(e){for(;e!=null&&e.leftCh!==null;)e=e.leftCh;return e},r.prototype.maximumAux=function(e){for(;e!=null&&e.rightCh!==null;)e=e.rightCh;return e},r.prototype.heightAux=function(e){return e===null?-1:Math.max(this.heightAux(e.leftCh),this.heightAux(e.rightCh))+1},r.prototype.insertNode=function(e){for(var t=null,s=this.root;s!==null;){var i=this.compare(e.element,s.element);if(i===0)return null;i<0?(t=s,s=s.leftCh):(t=s,s=s.rightCh)}return e.parent=t,t===null?this.root=e:this.compare(e.element,t.element)<0?t.leftCh=e:t.rightCh=e,e},r.prototype.createNode=function(e){return{element:e,leftCh:null,rightCh:null,parent:null}},r}();si.default=Uh;var Ih=or&&or.__extends||function(){var r=Object.setPrototypeOf||{__proto__:[]}instanceof Array&&function(e,t){e.__proto__=t}||function(e,t){for(var s in t)t.hasOwnProperty(s)&&(e[s]=t[s])};return function(e,t){r(e,t);function s(){this.constructor=e}e.prototype=t===null?Object.create(t):(s.prototype=t.prototype,new s)}}();Object.defineProperty(gn,"__esModule",{value:!0});var xh=si,Lh=function(r){Ih(e,r);function e(){return r!==null&&r.apply(this,arguments)||this}return e}(xh.default);gn.default=Lh;var ni={};Object.defineProperty(ni,"__esModule",{value:!0});var Ai=_t,Os=ot,Bh=function(){function r(e){this.data=[],this.compare=e||Ai.defaultCompare}return r.prototype.leftChildIndex=function(e){return 2*e+1},r.prototype.rightChildIndex=function(e){return 2*e+2},r.prototype.parentIndex=function(e){return Math.floor((e-1)/2)},r.prototype.minIndex=function(e,t){return t>=this.data.length?e>=this.data.length?-1:e:this.compare(this.data[e],this.data[t])<=0?e:t},r.prototype.siftUp=function(e){for(var t=this.parentIndex(e);e>0&&this.compare(this.data[t],this.data[e])>0;)Os.swap(this.data,t,e),e=t,t=this.parentIndex(e)},r.prototype.siftDown=function(e){for(var t=this.minIndex(this.leftChildIndex(e),this.rightChildIndex(e));t>=0&&this.compare(this.data[e],this.data[t])>0;)Os.swap(this.data,t,e),e=t,t=this.minIndex(this.leftChildIndex(e),this.rightChildIndex(e))},r.prototype.peek=function(){if(this.data.length>0)return this.data[0]},r.prototype.add=function(e){return Ai.isUndefined(e)?!1:(this.data.push(e),this.siftUp(this.data.length-1),!0)},r.prototype.removeRoot=function(){if(this.data.length>0){var e=this.data[0];return this.data[0]=this.data[this.data.length-1],this.data.splice(this.data.length-1,1),this.data.length>0&&this.siftDown(0),e}},r.prototype.contains=function(e){var t=Ai.compareToEquals(this.compare);return Os.contains(this.data,e,t)},r.prototype.size=function(){return this.data.length},r.prototype.isEmpty=function(){return this.data.length<=0},r.prototype.clear=function(){this.data.length=0},r.prototype.forEach=function(e){Os.forEach(this.data,e)},r}();ni.default=Bh;var yn={},Mh=or&&or.__extends||function(){var r=Object.setPrototypeOf||{__proto__:[]}instanceof Array&&function(e,t){e.__proto__=t}||function(e,t){for(var s in t)t.hasOwnProperty(s)&&(e[s]=t[s])};return function(e,t){r(e,t);function s(){this.constructor=e}e.prototype=t===null?Object.create(t):(s.prototype=t.prototype,new s)}}();Object.defineProperty(yn,"__esModule",{value:!0});var Nh=ar,Br=_t,jh=function(){function r(e,t){this.key=e,this.value=t}return r.prototype.unlink=function(){this.prev.next=this.next,this.next.prev=this.prev},r}(),go=function(){function r(){this.key=null,this.value=null}return r.prototype.unlink=function(){this.prev.next=this.next,this.next.prev=this.prev},r}();function $h(r){return!r.next}var zh=function(r){Mh(e,r);function e(t){var s=r.call(this,t)||this;return s.head=new go,s.tail=new go,s.head.next=s.tail,s.tail.prev=s.head,s}return e.prototype.appendToTail=function(t){var s=this.tail.prev;s.next=t,t.prev=s,t.next=this.tail,this.tail.prev=t},e.prototype.getLinkedDictionaryPair=function(t){if(!Br.isUndefined(t)){var s="$"+this.toStr(t),i=this.table[s];return i}},e.prototype.getValue=function(t){var s=this.getLinkedDictionaryPair(t);if(!Br.isUndefined(s))return s.value},e.prototype.remove=function(t){var s=this.getLinkedDictionaryPair(t);if(!Br.isUndefined(s))return r.prototype.remove.call(this,t),s.unlink(),s.value},e.prototype.clear=function(){r.prototype.clear.call(this),this.head.next=this.tail,this.tail.prev=this.head},e.prototype.replace=function(t,s){var i="$"+this.toStr(s.key);s.next=t.next,s.prev=t.prev,this.remove(t.key),s.prev.next=s,s.next.prev=s,this.table[i]=s,++this.nElements},e.prototype.setValue=function(t,s){if(!(Br.isUndefined(t)||Br.isUndefined(s))){var i=this.getLinkedDictionaryPair(t),o=new jh(t,s),n="$"+this.toStr(t);if(Br.isUndefined(i)){this.appendToTail(o),this.table[n]=o,++this.nElements;return}else return this.replace(i,o),i.value}},e.prototype.keys=function(){var t=[];return this.forEach(function(s,i){t.push(s)}),t},e.prototype.values=function(){var t=[];return this.forEach(function(s,i){t.push(i)}),t},e.prototype.forEach=function(t){for(var s=this.head.next;!$h(s);){var i=t(s.key,s.value);if(i===!1)return;s=s.next}},e}(Nh.default);yn.default=zh;var wn={};Object.defineProperty(wn,"__esModule",{value:!0});var tr=_t,Hh=ar,Oi=ot,qh=function(){function r(e,t,s){s===void 0&&(s=!1),this.dict=new Hh.default(e),this.equalsF=t||tr.defaultEquals,this.allowDuplicate=s}return r.prototype.getValue=function(e){var t=this.dict.getValue(e);return tr.isUndefined(t)?[]:Oi.copy(t)},r.prototype.setValue=function(e,t){if(tr.isUndefined(e)||tr.isUndefined(t))return!1;var s=this.dict.getValue(e);return tr.isUndefined(s)?(this.dict.setValue(e,[t]),!0):!this.allowDuplicate&&Oi.contains(s,t,this.equalsF)?!1:(s.push(t),!0)},r.prototype.remove=function(e,t){if(tr.isUndefined(t)){var s=this.dict.remove(e);return!tr.isUndefined(s)}var i=this.dict.getValue(e);return!tr.isUndefined(i)&&Oi.remove(i,t,this.equalsF)?(i.length===0&&this.dict.remove(e),!0):!1},r.prototype.keys=function(){return this.dict.keys()},r.prototype.values=function(){for(var e=this.dict.values(),t=[],s=0,i=e;s<i.length;s++)for(var o=i[s],n=0,a=o;n<a.length;n++){var u=a[n];t.push(u)}return t},r.prototype.containsKey=function(e){return this.dict.containsKey(e)},r.prototype.clear=function(){this.dict.clear()},r.prototype.size=function(){return this.dict.size()},r.prototype.isEmpty=function(){return this.dict.isEmpty()},r}();wn.default=qh;var oi={},Wh=or&&or.__extends||function(){var r=Object.setPrototypeOf||{__proto__:[]}instanceof Array&&function(e,t){e.__proto__=t}||function(e,t){for(var s in t)t.hasOwnProperty(s)&&(e[s]=t[s])};return function(e,t){r(e,t);function s(){this.constructor=e}e.prototype=t===null?Object.create(t):(s.prototype=t.prototype,new s)}}();Object.defineProperty(oi,"__esModule",{value:!0});var Vh=ar,Yh=_t,Kh=function(r){Wh(e,r);function e(t,s){var i=r.call(this,s)||this;return i.defaultFactoryFunction=t,i}return e.prototype.setDefault=function(t,s){var i=r.prototype.getValue.call(this,t);return Yh.isUndefined(i)?(this.setValue(t,s),s):i},e.prototype.getValue=function(t){return this.setDefault(t,this.defaultFactoryFunction())},e}(Vh.default);oi.default=Kh;var bn={};Object.defineProperty(bn,"__esModule",{value:!0});var Xh=_t,Qh=ni,Jh=function(){function r(e){this.heap=new Qh.default(Xh.reverseCompareFunction(e))}return r.prototype.enqueue=function(e){return this.heap.add(e)},r.prototype.add=function(e){return this.heap.add(e)},r.prototype.dequeue=function(){if(this.heap.size()!==0){var e=this.heap.peek();return this.heap.removeRoot(),e}},r.prototype.peek=function(){return this.heap.peek()},r.prototype.contains=function(e){return this.heap.contains(e)},r.prototype.isEmpty=function(){return this.heap.isEmpty()},r.prototype.size=function(){return this.heap.size()},r.prototype.clear=function(){this.heap.clear()},r.prototype.forEach=function(e){this.heap.forEach(e)},r}();bn.default=Jh;var _n={};Object.defineProperty(_n,"__esModule",{value:!0});var Zh=bs,ep=function(){function r(){this.list=new Zh.default}return r.prototype.push=function(e){return this.list.add(e,0)},r.prototype.add=function(e){return this.list.add(e,0)},r.prototype.pop=function(){return this.list.removeElementAtIndex(0)},r.prototype.peek=function(){return this.list.first()},r.prototype.size=function(){return this.list.size()},r.prototype.contains=function(e,t){return this.list.contains(e,t)},r.prototype.isEmpty=function(){return this.list.isEmpty()},r.prototype.clear=function(){this.list.clear()},r.prototype.forEach=function(e){this.list.forEach(e)},r}();_n.default=ep;var En={};Object.defineProperty(En,"__esModule",{value:!0});var Ie;(function(r){r[r.BEFORE=0]="BEFORE",r[r.AFTER=1]="AFTER",r[r.INSIDE_AT_END=2]="INSIDE_AT_END",r[r.INSIDE_AT_START=3]="INSIDE_AT_START"})(Ie||(Ie={}));var tp=function(){function r(e,t){e===void 0&&(e=[]),t===void 0&&(t={}),this.rootIds=e,this.nodes=t,this.initRootIds(),this.initNodes()}return r.prototype.initRootIds=function(){for(var e=0,t=this.rootIds;e<t.length;e++){var s=t[e];this.createEmptyNodeIfNotExist(s)}},r.prototype.initNodes=function(){for(var e in this.nodes)if(this.nodes.hasOwnProperty(e))for(var t=0,s=this.nodes[e];t<s.length;t++){var i=s[t];this.createEmptyNodeIfNotExist(i)}},r.prototype.createEmptyNodeIfNotExist=function(e){this.nodes[e]||(this.nodes[e]=[])},r.prototype.getRootIds=function(){var e=this.rootIds.slice();return e},r.prototype.getNodes=function(){var e={};for(var t in this.nodes)this.nodes.hasOwnProperty(t)&&(e[t]=this.nodes[t].slice());return e},r.prototype.getObject=function(){return{rootIds:this.getRootIds(),nodes:this.getNodes()}},r.prototype.toObject=function(){return this.getObject()},r.prototype.flatten=function(){for(var e=this,t=[],s=0;s<this.rootIds.length;s++){var i=this.rootIds[s];t.push({id:i,level:0,hasParent:!1,childrenCount:0}),h(i,this.nodes,t,0)}for(var o=0,n=t;o<n.length;o++){var a=n[o];a.childrenCount=u(a.id)}return t;function u(p){if(e.nodes[p]){var d=e.nodes[p].length;return d}else return 0}function h(p,d,f,y){if(y===void 0&&(y=0),!(!p||!d||!f||!d[p])){y++;for(var w=d[p],v=0;v<w.length;v++){var _=w[v];f.push({id:_,level:y,hasParent:!0}),h(_,d,f,y)}y--}}},r.prototype.moveIdBeforeId=function(e,t){return this.moveId(e,t,Ie.BEFORE)},r.prototype.moveIdAfterId=function(e,t){return this.moveId(e,t,Ie.AFTER)},r.prototype.moveIdIntoId=function(e,t,s){return s===void 0&&(s=!0),s?this.moveId(e,t,Ie.INSIDE_AT_START):this.moveId(e,t,Ie.INSIDE_AT_END)},r.prototype.swapRootIdWithRootId=function(e,t){var s=this.findRootId(e),i=this.findRootId(t);this.swapRootPositionWithRootPosition(s,i)},r.prototype.swapRootPositionWithRootPosition=function(e,t){var s=this.rootIds[t];this.rootIds[t]=this.rootIds[e],this.rootIds[e]=s},r.prototype.deleteId=function(e){this.rootDeleteId(e),this.nodeAndSubNodesDelete(e),this.nodeRefrencesDelete(e)},r.prototype.insertIdBeforeId=function(e,t){var s=this.findRootId(e);s>-1&&this.insertIdIntoRoot(t,s);for(var i in this.nodes)if(this.nodes.hasOwnProperty(i)){var o=this.findNodeId(i,e);o>-1&&this.insertIdIntoNode(i,t,o)}},r.prototype.insertIdAfterId=function(e,t){var s=this.findRootId(e);s>-1&&this.insertIdIntoRoot(t,s+1);for(var i in this.nodes)if(this.nodes.hasOwnProperty(i)){var o=this.findNodeId(i,e);o>-1&&this.insertIdIntoNode(i,t,o+1)}},r.prototype.insertIdIntoId=function(e,t){this.nodeInsertAtEnd(e,t),this.nodes[t]=[]},r.prototype.insertIdIntoRoot=function(e,t){if(t===void 0)this.rootInsertAtEnd(e);else if(t<0){var s=this.rootIds.length;this.rootIds.splice(t+s+1,0,e)}else this.rootIds.splice(t,0,e);this.nodes[e]=this.nodes[e]||[]},r.prototype.insertIdIntoNode=function(e,t,s){if(this.nodes[e]=this.nodes[e]||[],this.nodes[t]=this.nodes[t]||[],s===void 0)this.nodeInsertAtEnd(e,t);else if(s<0){var i=this.nodes[e].length;this.nodes[e].splice(s+i+1,0,t)}else this.nodes[e].splice(s,0,t)},r.prototype.moveId=function(e,t,s){var i=e,o=this.findRootId(i);this.nodes[t];for(var n in this.nodes)if(this.nodes.hasOwnProperty(n)){this.findNodeId(n,t);break}var a=t,u=this.findRootId(a);this.nodes[t];for(var n in this.nodes)if(this.nodes.hasOwnProperty(n)){this.findNodeId(n,t);break}if(o>-1)if(u>-1)switch(this.rootDelete(o),u>o&&u--,s){case Ie.BEFORE:this.insertIdIntoRoot(i,u);break;case Ie.AFTER:this.insertIdIntoRoot(i,u+1);break;case Ie.INSIDE_AT_START:this.nodeInsertAtStart(a,i);break;case Ie.INSIDE_AT_END:this.nodeInsertAtEnd(a,i);break}else{this.rootDelete(o);for(var n in this.nodes)if(this.nodes.hasOwnProperty(n)){var h=this.findNodeId(n,a);if(h>-1){switch(s){case Ie.BEFORE:this.insertIdIntoNode(n,i,h);break;case Ie.AFTER:this.insertIdIntoNode(n,i,h+1);break;case Ie.INSIDE_AT_START:this.nodeInsertAtStart(a,i);break;case Ie.INSIDE_AT_END:this.nodeInsertAtEnd(a,i);break}break}}}else if(u>-1){for(var n in this.nodes)if(this.nodes.hasOwnProperty(n)){var h=this.findNodeId(n,i);if(h>-1){this.nodeDeleteAtIndex(n,h);break}}switch(s){case Ie.BEFORE:this.insertIdIntoRoot(i,u);break;case Ie.AFTER:this.insertIdIntoRoot(i,u+1);break;case Ie.INSIDE_AT_START:this.nodeInsertAtStart(a,i);break;case Ie.INSIDE_AT_END:this.nodeInsertAtEnd(a,i);break}}else{for(var n in this.nodes)if(this.nodes.hasOwnProperty(n)){var h=this.findNodeId(n,i);if(h>-1){this.nodeDeleteAtIndex(n,h);break}}for(var n in this.nodes)if(this.nodes.hasOwnProperty(n)){var h=this.findNodeId(n,a);if(h>-1){switch(s){case Ie.BEFORE:this.insertIdIntoNode(n,i,h);break;case Ie.AFTER:this.insertIdIntoNode(n,i,h+1);break;case Ie.INSIDE_AT_START:this.nodeInsertAtStart(a,i);break;case Ie.INSIDE_AT_END:this.nodeInsertAtEnd(a,i);break}break}}}},r.prototype.swapArrayElements=function(e,t,s){var i=e[t];return e[t]=e[s],e[s]=i,e},r.prototype.rootDeleteId=function(e){var t=this.findRootId(e);t>-1&&this.rootDelete(t)},r.prototype.nodeAndSubNodesDelete=function(e){for(var t=[],s=0;s<this.nodes[e].length;s++){var i=this.nodes[e][s];this.nodeAndSubNodesDelete(i),t.push(e)}this.nodeDelete(e);for(var s=0;s<t.length;s++)this.nodeDelete(t[s])},r.prototype.nodeRefrencesDelete=function(e){for(var t in this.nodes)if(this.nodes.hasOwnProperty(t))for(var s=0;s<this.nodes[t].length;s++){var i=this.nodes[t][s];i===e&&this.nodeDeleteAtIndex(t,s)}},r.prototype.nodeDelete=function(e){delete this.nodes[e]},r.prototype.findRootId=function(e){return this.rootIds.indexOf(e)},r.prototype.findNodeId=function(e,t){return this.nodes[e].indexOf(t)},r.prototype.findNode=function(e){return this.nodes[e]},r.prototype.nodeInsertAtStart=function(e,t){this.nodes[e].unshift(t)},r.prototype.nodeInsertAtEnd=function(e,t){this.nodes[e].push(t)},r.prototype.rootDelete=function(e){this.rootIds.splice(e,1)},r.prototype.nodeDeleteAtIndex=function(e,t){this.nodes[e].splice(t,1)},r.prototype.rootInsertAtStart=function(e){this.rootIds.unshift(e)},r.prototype.rootInsertAtEnd=function(e){this.rootIds.push(e)},r}();En.default=tp;Object.defineProperty(Je,"__esModule",{value:!0});var rp=ot;Je.arrays=rp;var sp=fn;Je.Bag=sp.default;var ip=gn;Je.BSTree=ip.default;var np=si;Je.BSTreeKV=np.default;var op=ar;Je.Dictionary=op.default;var ap=ni;Je.Heap=ap.default;var lp=yn;Je.LinkedDictionary=lp.default;var cp=bs;Je.LinkedList=cp.default;var up=wn;Je.MultiDictionary=up.default;var hp=oi;Je.FactoryDictionary=hp.default;var pp=oi;Je.DefaultDictionary=pp.default;var dp=ii;Je.Queue=dp.default;var mp=bn;Je.PriorityQueue=mp.default;var fp=ri;Je.Set=fp.default;var gp=_n,yp=Je.Stack=gp.default,wp=En;Je.MultiRootTree=wp.default;var bp=_t;Je.util=bp;class _r extends Error{constructor(e,t){super(e),this.message=e,this.cause=t,this.name=this.constructor.name,Error.captureStackTrace&&Error.captureStackTrace(this,this.constructor)}toFriendlyString(){return`[${this.name}] ${this.message}`}saveToLogger(e,t,...s){e==it.INFO?S.info(t,s):e==it.WARN?S.warn(e,t,s):e==it.ERROR&&S.error(e,t,s)}}class ls extends _r{constructor(e,t,s,i){let o=`请求 ${t} 失败: ${s}`;super(o,i),this.code=e,this.path=t,this.message=s,this.cause=i}}class _p extends ls{}class Tn extends _r{constructor(e,t,s,i,o,n){let a=`请求 ${t} 失败: ${s}`;super(a,n),this.code=e,this.url=t,this.message=s,this.request=i,this.response=o}}class ze extends Tn{constructor(e,t,s,i,o,n){super(e,t,s,i,o,n),this.code=e,this.url=t,this.message=s,this.request=i,this.response=o,this.cause=n}}class Fe extends Tn{}class vn extends _r{constructor(t,s,i,...o){super(s,i);H(this,"data");this.code=t,this.message=s,this.cause=i,this.data=o}}class Ep extends vn{}class Mr extends vn{constructor(e,t,s,i,...o){super(e,s,i),this.code=e,this.path=t,this.message=s,this.cause=i}toFriendlyString(){return`[${this.name}] ${this.message}:${this.path}`}}class Jt extends _r{constructor(t,s,i,...o){super(s,i);H(this,"data");this.code=t,this.message=s,this.cause=i,this.data=o}}class Ht extends Jt{constructor(e,t,s,...i){super(e,t,s,...i),this.code=e,this.message=t,this.cause=s,this.data=i,console.log("syncError---")}toFriendlyString(){return`${this.message}`}}var Ge=(r=>(r[r.PROMISE_ERROR=-100]="PROMISE_ERROR",r[r.SUCCESSED=200]="SUCCESSED",r[r.FAILED=204]="FAILED",r[r.LIMITED=-111]="LIMITED",r))(Ge||{}),Us=(r=>(r[r.INVALID=100]="INVALID",r[r.EMPTY=101]="EMPTY",r[r.REQUIRED_FIELD=102]="REQUIRED_FIELD",r[r.FORMAT=103]="FORMAT",r[r.MISSING=104]="MISSING",r[r.WRITE_FAILED=105]="WRITE_FAILED",r[r.READ_FAILED=105]="READ_FAILED",r))(Us||{}),ne=(r=>(r[r.NOT_FOUND=404]="NOT_FOUND",r[r.OK=200]="OK",r[r.SERVICE_ERROR=500]="SERVICE_ERROR",r[r.GIT=100]="GIT",r[r.GIT_COMMIT=101]="GIT_COMMIT",r[r.GIT_PUSH=102]="GIT_PUSH",r[r.GIT_COMMIT_PUSH=103]="GIT_COMMIT_PUSH",r[r.GIT_CLONE=104]="GIT_CLONE",r[r.GIT_PULL=105]="GIT_PULL",r[r.GIT_FETCH=106]="GIT_FETCH",r[r.GIT_BLOB=107]="GIT_BLOB",r[r.NETWORK=600]="NETWORK",r))(ne||{}),dr=(r=>(r[r.OK=200]="OK",r[r.ERROR=500]="ERROR",r[r.CONFLICT=300]="CONFLICT",r[r.MERGE=600]="MERGE",r))(dr||{}),wr=(r=>(r[r.GLOBAL_EXCEPTION_HANDLER=0]="GLOBAL_EXCEPTION_HANDLER",r[r.METHOD_EXCEPTION_HANDLER=1]="METHOD_EXCEPTION_HANDLER",r[r.BUSINESS_EXCEPTION_HANDLER=2]="BUSINESS_EXCEPTION_HANDLER",r[r.SYSTEM_EXCEPTION_HANDLER=3]="SYSTEM_EXCEPTION_HANDLER",r))(wr||{});const zs=new WeakMap;function aa(r,e,t){let s=zs.get(r);s||(s=new Map,zs.set(r,s)),s.set(e,t)}function qi(r,e){const t=zs.get(r);return t==null?void 0:t.get(e)}function Tp(r,e){var t;return((t=zs.get(r))==null?void 0:t.has(e))??!1}var vp=Object.defineProperty,Cp=Object.getOwnPropertyDescriptor,Ft=(r,e,t,s)=>{for(var i=s>1?void 0:s?Cp(e,t):e,o=r.length-1,n;o>=0;o--)(n=r[o])&&(i=(s?n(e,t,i):n(i))||i);return s&&i&&vp(e,t,i),i};let ft=class{handleError(r){S.error(it.ERROR,r.message,r.stack)}handlePluginBaseError(r){r.saveToLogger(it.ERROR,r.toFriendlyString(),`
 
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handlePluginConfigError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleInvalidConfigError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handlePluginApiError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【REQUEST:】
-
-`,r.request,`
-
-【response:】
-
-`,r.response,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleNetWorkError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【url:】
-
-`,r.url,`
-
-【data:】
-
-`,r.message,`
-
-【request:】
-
-`,r.request,`
-
-【response:】
-
-`,r.response,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleGitAPIError(r){r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【url:】
-
-`,r.url,`
-
-【data:】
-
-`,r.message,`
-
-【request:】
-
-`,r.request,`
-
-【response:】
-
-`,r.response,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleDataOperationError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【data:】
-
-`,r.data,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleDataTypeError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【data:】
-
-`,r.data,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleDataConflictError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【data:】
-
-`,r.data,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleBussinessError(r){r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【data:】
-
-`,r.data,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}handleSyncError(r){q.showMessage(r.toFriendlyString(),wt,"error"),r.saveToLogger(it.ERROR,r.toFriendlyString(),`
-
-【CODE:】
-
-`,r.code,`
-
-【data:】
-
-`,r.data,`
-
-【error:】
-
-`,r.cause,`
-
-【stack:】
-
-`,r.stack)}};Ft([It(Error)],ft.prototype,"handleError",1);Ft([It(_r)],ft.prototype,"handlePluginBaseError",1);Ft([It(ls)],ft.prototype,"handlePluginConfigError",1);Ft([It(_p)],ft.prototype,"handleInvalidConfigError",1);Ft([It(Tn)],ft.prototype,"handlePluginApiError",1);Ft([It(ze)],ft.prototype,"handleNetWorkError",1);Ft([It(Fe)],ft.prototype,"handleGitAPIError",1);Ft([It(vn)],ft.prototype,"handleDataOperationError",1);Ft([It(Ep)],ft.prototype,"handleDataTypeError",1);Ft([It(Jt)],ft.prototype,"handleBussinessError",1);Ft([It(Ht)],ft.prototype,"handleSyncError",1);ft=Ft([Ap()],ft);class kp{}class Sp{}class Fp{}const Pp=Object.freeze(Object.defineProperty({__proto__:null,get AppExceptionHandler(){return ft},BusinessExceptionHandler:Sp,GlobalExceptionHandler2:kp,SystemExceptionHandler:Fp},Symbol.toStringTag,{value:"Module"})),$t=class $t{constructor(){this.scanAndRegisterHandlers()}static getInstance(){return this.instance||(this.instance=new $t),this.instance}scanAndRegisterHandlers(){this.getAllApplicationClasses(Pp).forEach(t=>{Tp(t,wr.GLOBAL_EXCEPTION_HANDLER)&&this.registerHandlerClass(t)})}getAllApplicationClasses(e){const t=[];for(const s in e){const i=e[s];typeof i=="function"&&qi(i,wr.GLOBAL_EXCEPTION_HANDLER)&&t.push(i)}return t}registerHandlerClass(e){let t=$t.handlerContainer.get(e);t||(t=new e,$t.handlerContainer.set(e,t)),(qi(e.prototype,wr.METHOD_EXCEPTION_HANDLER)||new Map).forEach((i,o)=>{$t.handlers.set(o,t[i].bind(t))})}static dispatchError(e){const t=$t.handlers.get(e.constructor);if(t)return t(e);for(const[s,i]of this.handlers)if(e instanceof s)return i(e);throw e}};H($t,"instance"),H($t,"handlers",new Map),H($t,"handlerContainer",new Map);let br=$t;function Ap(){return r=>{aa(r,wr.GLOBAL_EXCEPTION_HANDLER,!0)}}function It(...r){return(e,t,s)=>{if(typeof s.value!="function")throw new Error("@ExceptionHandler must be applied to a method");const o=qi(e,wr.METHOD_EXCEPTION_HANDLER)||new Map;return r.forEach(n=>{o.set(n,t.toString())}),aa(e,wr.METHOD_EXCEPTION_HANDLER,o),s}}function we(r={}){const{rethrow:e=!0,catchCallbackErrors:t=!0}=r;return function(s,i,o){const n=o.value;if(typeof n!="function")throw new Error("@CatchError must be applied to a method");return o.value=function(...a){const u=h=>function(...p){try{return h.apply(this,p)}catch(d){if(br.dispatchError(d),e)throw d}};t&&(a=a.map(h=>typeof h=="function"?u(h):h));try{const h=n.apply(this,a);return h instanceof Promise?h.catch(p=>{if(br.dispatchError(p),r.rethrow)throw p}):h}catch(h){if(br.dispatchError(h),r.rethrow)throw h}},o}}var Op=Object.defineProperty,Rp=Object.getOwnPropertyDescriptor,He=(r,e,t,s)=>{for(var i=Rp(e,t),o=r.length-1,n;o>=0;o--)(n=r[o])&&(i=n(e,t,i)||i);return i&&Op(e,t,i),i};class xe{constructor(){H(this,"owner");H(this,"repo");H(this,"branch");H(this,"octokit");H(this,"baseUrl");H(this,"i18n");H(this,"workArea");H(this,"settingUtils");H(this,"encoding","utf8")}async handleRemoteDataCoverPolicy(e,t,s,i="raw",o,n,a){let u="raw",h=s.path,p=s.name;if(i=="markdown"&&Gt(s.path)&&!s.forceRaw){let d=Q.extname(s.path),f=s.path.replace(d,".sy");s.path=f,s.name=Q.basename(f),u="markdown"}if(a)if(S.info("强制覆盖：",a),s.status==Fr||s.status==Ts||s.status==vs){let d=await this.getRepoFileContent(h,o),f=new Blob([d.content]);t?await ue(s.path,!1,f,void 0,u,"update"):await ue(s.path,!1,f,void 0,u,"create")}else s.status==Rt&&t&&await Dr(s.path);else if(S.info("非强制覆盖：",a),s.status==Fr||s.status==Ts||s.status==vs){let d=await this.getRepoFileContent(h,o),f=new Blob([d.content]);if(t&&!await Ps(s.path)){let y=await this.getRepoFileContent(h,n);y||(y={path:h,type:"blob",sha:"",content:""});let w=new Blob([y.content]),v=await et(s.path,u),_=await w.text(),F=await v.text(),A=await f.text(),P=await Ur(_,F,A);if(S.info("remote -cover- local  merge:",s.path,P),P.isConflict){if(this.settingUtils.get(mt)){let R=Q.extname(s.path),O=Q.basename(s.path,R);if(tt(s.path)){let G=await Or(O),x=await Ar(G.id);await ue(s.path,!1,f,de,u,"update"),await Pr(G.box,`${G.hpath}${this.generateConflictPrefix()}`,x.kramdown)}else{let G=`${O}${this.generateConflictPrefix()}${R}`,x=Q.basename(s.path),N=s.path.replace(x,G);S.info("confilctFileName",G,"oldFileName",x,"confilctPath",N),await ue(N,!1,v,de,u,"create"),await ue(s.path,!1,f,de,u,"update")}}else await ue(s.path,!1,f,de,u,"update");throw new Mr(dr.CONFLICT,s.path,this.i18n.fileConflictInfo)}else{let R=new Blob([P.content]),O=await R.arrayBuffer();await ue(s.path,!1,R,de,u,"update");let G={name:p,path:h,mode:"100644",type:d.type,sha:d.sha,size:R.size,encoding:this.encoding,content:O};e=await this.addFileToWorkArea(e,G,"update")}}else t?await ue(s.path,!1,f,de,u,"update"):await ue(s.path,!1,f,de,u,"create")}else s.status==Rt&&t&&await Dr(s.path)}async handleRemoteCoverLocal(e=!1){S.info("handleRemoteCoverLocal");const t=Vr(Math.min(hi,navigator.hardwareConcurrency)),s=new AbortController,{signal:i}=s,o=[],n=[];try{let a=this.settingUtils.get(De),u;if(!a||a.length==0){S.info("第一次同步");try{if(u=await this.getInitialCommit(this.branch),u&&u.sha)a=u.sha;else throw new ze(ne.NOT_FOUND,"handleRemoteCoverLocal-getInitialCommit-localLatestCommit",this.i18n.initCheckNet,this.branch,u)}catch{throw new ze(ne.NOT_FOUND,"handleRemoteCoverLocal-getInitialCommit-localLatestCommit",this.i18n.initCheckNet,this.branch,u)}}else try{if(u=await this.getCommitInfo(a),!u)throw new ze(ne.NOT_FOUND,"handleRemoteCoverLocal-getCommitInfo-localLatestCommit",this.i18n.initCheckNet,this.branch,u)}catch{throw new ze(ne.NOT_FOUND,"handleRemoteCoverLocal-getCommitInfo-localLatestCommit",this.i18n.initCheckNet,this.branch,u)}let h,p,d;try{if(h=await this.getCommitInfo(this.branch),h)p=h.sha,d=h.tree.sha;else throw new ze(ne.NOT_FOUND,"handleRemoteCoverLocal-getCommitInfo-remoteLatestCommit",this.i18n.initCheckNet,this.branch,h)}catch{throw new ze(ne.NOT_FOUND,"handleRemoteCoverLocal-getCommitInfo-remoteLatestCommit",this.i18n.initCheckNet,this.branch,h)}let f={workTrees:new Array,size:0,latestTreeSha:d,latestCommitSha:p,slice:-1},y=Number(this.settingUtils.get(Pe)),w=await Ir(y,"/*"),v=this.settingUtils.get(ut),_=await this.getInitialCommit(this.branch),F=await this.compareCommitFiles(_.sha,p),P=(await this.handleWorkSpaceModifyFileList(w,!1,"/*")).map(G=>G.path);for(let G=0;G<F.length;G++){let x=F[G],N="raw",I=x.path;if(v==Sr){if(Gt(x.path)&&!x.forceRaw){let C=Q.extname(x.path),B=x.path.replace(C,".sy");x.path=B,N="markdown"}else if(tt(x.path))continue}let te=P.indexOf(x.path);x.path=I,o.push(t(()=>R(te,x,N,G)))}const R=(G,x,N="raw",I)=>new Promise((te,C)=>{if(i.addEventListener("abort",$=>{S.info("aborted.....",$),C(new DOMException("Aborted","AbortError"))}),i.aborted)return S.info("aborted2....."),C(new DOMException("Aborted","AbortError"));let B=G>=0;this.handleRemoteDataCoverPolicy(f,B,x,N,p,a,e).then($=>{S.info("gitutil-runRemoteSync:","res",$,"chunkIndex:",I,"fileInfo:",x,"localIndex:",G),te()}).catch($=>{S.error("handleRemoteDataCover --- runRemoteSyncTask:",$,"stack:",$.stack),n[I]=$.error,t.clearQueue(),C(new Jt(Ge.PROMISE_ERROR,"handleRemoteDataCover --- runRemoteSyncTask",$,n))})});await Promise.all(o),o.length=0;let O=await this.commitAndPushFileToRemote(f,pi());if(O.successed)this.settingUtils.setAndSave(De,O.sha),this.settingUtils.setAndSave(rt,new Date().toLocaleString()),q.showMessage(this.i18n.fileSyncSuccess,ve,"info");else throw this.settingUtils.setAndSave(De,O.sha),new Ht(Ge.FAILED,this.i18n.fileSyncFailed,null,f,O)}catch(a){throw s.abort("promise 任务出错"),a instanceof ze?a:new Ht(Ge.FAILED,this.i18n.fileSyncFailed,a)}}async handleLocalDataCoverPolicy(e,t,s,i="raw",o,n,a){let u="raw",h=s.path;if(i=="markdown"&&tt(s.path)&&!s.forceRaw){let p=Q.extname(s.path),d=s.path.replace(p,".md");s.path=d,s.name=Q.basename(d),u="markdown"}if(a){if(S.info("强制覆盖：",a),s.status==Fr||s.status==Ts||s.status==vs){let p=await et(h,u),d=await p.arrayBuffer();if(t){let f=await this.getRepoFileContent(s.path,o),y={name:s.name,path:s.path,mode:"100644",type:f.type,sha:f.sha,size:p.size,encoding:this.encoding,content:d};e=await this.addFileToWorkArea(e,y,"update")}else{let f={name:s.name,path:s.path,mode:"100644",type:s.type,sha:"",size:p.size,encoding:this.encoding,content:d};e=await this.addFileToWorkArea(e,f,"create")}}else if(s.status==Rt&&t){let p=await this.getRepoFileContent(s.path,o),d={name:s.name,path:s.path,mode:"100644",type:p.type,sha:p.sha,size:0,encoding:this.encoding,content:""};e=await this.addFileToWorkArea(e,d,"delete")}}else if(S.info("非强制覆盖：",a),s.status==Fr||s.status==Ts||s.status==vs){let p=await et(h,u),d=await p.arrayBuffer();if(t&&!await Ps(h)){let f=await this.getRepoFileContent(s.path,o),y=new Blob([f.content]),w=await this.getRepoFileContent(s.path,n);w||(w={path:s.path,type:"blob",sha:"",content:""});let _=await new Blob([w.content]).text(),F=await p.text(),A=await y.text(),P=await Ur(_,F,A);if(S.info("local -cover- remote merge:",s.path,P),P.isConflict){if(this.settingUtils.get(mt)){let R=Q.extname(h),O=Q.basename(h,R);if(tt(h)){await ue(h,!1,y,de,u,"update");let G=await Or(O),x=await Ar(G.id);await ue(h,!1,p,de,u,"update"),await Pr(G.box,`${G.hpath}${this.generateConflictPrefix()}`,x.kramdown)}else{let G=`${O}${this.generateConflictPrefix()}${R}`,x=Q.basename(s.path),N=s.path.replace(x,G);S.info("confilctFileName",G,"oldFileName",x,"confilctPath",N),await ue(N,!1,y,de,u,"create");let I={name:s.name,path:s.path,mode:"100644",type:f.type,sha:f.sha,size:p.size,encoding:this.encoding,content:d};e=await this.addFileToWorkArea(e,I,"update")}}else{let R={name:s.name,path:s.path,mode:"100644",type:f.type,sha:f.sha,size:p.size,encoding:this.encoding,content:d};e=await this.addFileToWorkArea(e,R,"update")}throw new Mr(dr.CONFLICT,h,this.i18n.fileConflictInfo)}else{let R=new Blob([P.content]),O=await R.arrayBuffer();await ue(h,!1,R,de,u,"update");let G={name:s.name,path:s.path,mode:"100644",type:f.type,sha:f.sha,size:R.size,encoding:this.encoding,content:O};e=await this.addFileToWorkArea(e,G,"update")}}else if(t){let f=await this.getRepoFileContent(s.path,o),y={name:s.name,path:s.path,mode:"100644",type:f.type,sha:f.sha,size:p.size,encoding:this.encoding,content:d};e=await this.addFileToWorkArea(e,y,"update")}else{let f={name:s.name,path:s.path,mode:"100644",type:s.type,sha:"",size:p.size,encoding:this.encoding,content:d};e=await this.addFileToWorkArea(e,f,"create")}}else if(s.status==Rt&&(S.info("local -cover- remote fileRemove:",s),t)){let p=await this.getRepoFileContent(s.path,o),d={name:s.name,path:s.path,mode:"100644",type:p.type,sha:p.sha,size:0,encoding:this.encoding,content:""};e=await this.addFileToWorkArea(e,d,"delete")}}async handleLocalCoverRemote(e=!1){S.info("handleLocalCoverRemote");const t=Vr(Math.min(hi,navigator.hardwareConcurrency)),s=new AbortController,{signal:i}=s,o=[],n=[];try{let a=this.settingUtils.get(De),u,h;if(!a||a.length==0){S.info("第一次同步");try{if(h=await this.getInitialCommit(this.branch),h&&h.sha)a=h.sha,u=h.tree.sha;else throw new ze(ne.NOT_FOUND,"handleLocalCoverRemote-getInitialCommit-localLatestCommit",this.i18n.initCheckNet,this.branch,h)}catch{throw new ze(ne.NOT_FOUND,"handleLocalCoverRemote-getInitialCommit-localLatestCommit",this.i18n.initCheckNet,this.branch,h)}}else try{if(h=await this.getCommitInfo(a),h)u=h.tree.sha;else throw new ze(ne.NOT_FOUND,"handleLocalCoverRemote-getCommitInfo-localLatestCommit",this.i18n.initCheckNet,a,h)}catch{throw new ze(ne.NOT_FOUND,"handleLocalCoverRemote-getCommitInfo-localLatestCommit",this.i18n.initCheckNet,a,h)}let p,d,f;try{if(p=await this.getCommitInfo(this.branch),p)d=p.sha,f=p.tree.sha;else throw new ze(ne.NOT_FOUND,"handleLocalCoverRemote-getCommitInfo-remoteLatestCommit",this.i18n.initCheckNet,this.branch,h)}catch{throw new ze(ne.NOT_FOUND,"handleLocalCoverRemote-getCommitInfo-remoteLatestCommit",this.i18n.initCheckNet,this.branch,h)}let y={workTrees:new Array,size:0,latestTreeSha:f,latestCommitSha:d,slice:-1},w=Number(this.settingUtils.get(Pe)),v=await Ir(w,"/*"),_=this.settingUtils.get(ut),F=await this.getGitTreeBySha(f);S.info("remoteLatestFileTrees",F);let A=F.filter(N=>N.type.toLowerCase()!="tree").map(N=>N.path);S.info("remoteLatestTreePaths",A);let P=await this.getGitTreeBySha(u);P=P.filter(N=>N.type.toLowerCase()!="tree"),S.info("localLatestFileTrees:",P);let R=await this.handleWorkSpaceModifyFileList(v,!1,"/*")??[];S.info("currentLocalModifyFile:",R);let O=R.map(N=>N.path);for(let N=0;N<P.length;N++){let I=P[N];if(I.type.toLowerCase()!="tree"){if(_==Sr){if(tt(I.path)){let te=Q.basename(I.path),C={sha:I.sha,mode:"100644",type:I.type,forceRaw:!0,name:te,path:I.path,status:Rt,updated:new Date};R.push(C);continue}}else if(_==Rn&&Gt(I.path)){let te=Q.basename(I.path),C={sha:I.sha,mode:"100644",type:I.type,forceRaw:!0,name:te,path:I.path,status:Rt,updated:new Date};R.push(C);continue}if(Gt(I.path)){let te=Q.extname(I.path),C=I.path.replace(te,".sy");I.path=C}if(!O.includes(I.path)){let te=Q.basename(I.path),C={sha:I.sha,mode:"100644",type:I.type,name:te,path:I.path,status:Rt,updated:new Date(new Date(h.date).getTime()+Es)};R.push(C)}}}for(let N=0;N<R.length;N++){let I=R[N],te="raw",C=I.path;if(_==Sr&&tt(I.path)&&!I.forceRaw){let $=Q.extname(I.path),K=I.path.replace($,".md");I.path=K,te="markdown"}let B=A.indexOf(I.path);I.path=C,o.push(t(()=>G(B,I,te,N)))}const G=(N,I,te="raw",C)=>new Promise((B,$)=>{if(i.addEventListener("abort",W=>{S.info("aborted.....",W),$(new DOMException("Aborted","AbortError"))}),i.aborted)return S.info("aborted2....."),$(new DOMException("Aborted","AbortError"));let K=N>=0;this.handleLocalDataCoverPolicy(y,K,I,te,d,a,e).then(W=>{S.info("gitutil-runRemoteSync:","res",W,"chunkIndex:",C,"fileInfo:",I,"localIndex:",N),B()}).catch(W=>{S.error("handleLovalDataCover --- runRemoteSyncTask:",W,"stack:",W.stack),n[C]=W.error,t.clearQueue(),$(new Jt(Ge.PROMISE_ERROR,"handleLovalDataCover --- runRemoteSyncTask",W,n))})});await Promise.all(o),o.length=0;let x=await this.commitAndPushFileToRemote(y,pi());if(x.successed)this.settingUtils.setAndSave(De,x.sha),this.settingUtils.setAndSave(rt,new Date().toLocaleString()),q.showMessage(this.i18n.fileSyncSuccess,ve,"info");else throw this.settingUtils.setAndSave(De,x.sha),new Ht(Ge.FAILED,this.i18n.fileSyncFailed,null,y,x)}catch(a){throw s.abort("promise 任务出错"),a instanceof _r?a:new Ht(Ge.FAILED,this.i18n.fileSyncFailed,a)}}async handleAutoRemoteAndLocalFileSync(){S.info("handleAutoRemoteAndLocalFileSync");const e=Vr(Math.min(hi,navigator.hardwareConcurrency)),t=new AbortController,{signal:s}=t,i=[],o=[];try{let n=[],a=[],u=[],h=[],p=[],d=[],f=[],y=[],w=this.settingUtils.get(De),v,_;if(!w||w.length==0){S.info("第一次同步");try{if(_=await this.getInitialCommit(this.branch),_&&_.sha)w=_.sha,v=_.tree.sha;else throw new ze(ne.NOT_FOUND,"handleAutoRemoteAndLocalFileSync-getInitialCommit-localLatestCommit",this.i18n.initCheckNet,this.branch,_)}catch{throw new ze(ne.NOT_FOUND,"handleAutoRemoteAndLocalFileSync-getInitialCommit-localLatestCommit",this.i18n.initCheckNet,this.branch,_)}}else try{if(_=await this.getCommitInfo(w),_)v=_.tree.sha;else throw new ze(ne.NOT_FOUND,"handleAutoRemoteAndLocalFileSync-getCommitInfo-localLatestCommit",this.i18n.initCheckNet,w,_)}catch{throw new ze(ne.NOT_FOUND,"handleAutoRemoteAndLocalFileSync-getCommitInfo-localLatestCommit",this.i18n.initCheckNet,w,_)}let F,A,P;try{if(P=await this.getCommitInfo(this.branch),P)F=P.sha,A=P.tree.sha;else throw new ze(ne.NOT_FOUND,"handleAutoRemoteAndLocalFileSync-getCommitInfo-remoteLatestCommit",this.i18n.initCheckNet,this.branch,P)}catch{throw new ze(ne.NOT_FOUND,"handleAutoRemoteAndLocalFileSync-getCommitInfo-remoteLatestCommit",this.i18n.initCheckNet,this.branch,P)}let R={workTrees:new Array,size:0,latestTreeSha:A,latestCommitSha:F,slice:-1};S.info("workArea:",R);let O=Number(this.settingUtils.get(Pe)),G=await Ir(O,"/*"),x=this.settingUtils.get(ut);f=await this.compareCommitFiles(w,F),S.info("remoteLatestModifyFiles:",f);let N=await Ir(Do,"/*"),I=await Ir(Go,"/*"),te=await Ir(Li,"/*"),C=-1,B=G;S.info("-======同步范围",N,I,te,B,G),u=await this.getGitTreeBySha(v);let K=(await this.handleWorkSpaceModifyFileList(G,!1,"/*")).map(z=>z.path);for(let z=0;z<u.length;z++){let L=u[z];if(L.type.toLowerCase()!="tree"){if(Ei(L.path,te)?C<0&&(S.info("notebook------------",L),B=te,C+=1):Ei(L.path,I)?C<1&&(S.info("data------------",L),B=I,C+=1):Ei(L.path,N)&&C<2&&(S.info("workspace------------",L),B=N,C+=1),x==Sr){if(tt(L.path)){let oe=Q.basename(L.path),V={sha:L.sha,mode:"100644",type:L.type,forceRaw:!0,name:oe,path:L.path,status:Rt,updated:new Date};p.push(V);continue}}else if(x==Rn&&Gt(L.path)){let oe=Q.basename(L.path),V={sha:L.sha,mode:"100644",type:L.type,forceRaw:!0,name:oe,path:L.path,status:Rt,updated:new Date};p.push(V);continue}if(Gt(L.path)){let oe=Q.extname(L.path),V=L.path.replace(oe,".sy");L.path=V}if(!K.includes(L.path)){let oe=Q.basename(L.path),V={sha:L.sha,mode:"100644",type:L.type,name:oe,path:L.path,status:Rt,updated:new Date(new Date(_.date).getTime()+Es)};p.push(V)}}}if(C=Li-C,S.info("remoteRangeFiles:",B,C,O),C>O){let z=await this.handleWorkSpaceModifyFileList(B,!0,"/*");p.push(...z),S.info("remoteAndCurrentCommonRangeFiles:",z);let L=await this.handleWorkSpaceModifyFileList(G,!0,"/*",new Date(0),B);p.push(...L),S.info("remoteAndCurrentDiffRangeFiles:",L)}else{let z=await this.handleWorkSpaceModifyFileList(G,!0,"/*");p.push(...z),S.info("workspaceModifyFiles:",z)}if(p.length==0&&f.length==0)return q.showMessage(this.i18n.fileSyncSuccess,ve,"info"),!0;n=await this.getGitTreeBySha(A),n=n.filter(z=>z.type.toLowerCase()!="tree"),S.info("remoteLatestFileTrees filter:",n),u=await this.getGitTreeBySha(v),u=u.filter(z=>z.type.toLowerCase()!="tree"),S.info("localLatestFileTrees filter:",u),a=n.map(z=>z.path),h=u.map(z=>z.path),y=f.map(z=>z.path),S.info("remoteLatestFileTreePaths",a,"localLatestFileTreePaths",h,"remoteLatestModifyFilePaths:",y),await Promise.all(i),i.length=0,S.info("currentLocalModifyFile:",p);for(let z=0;z<p.length;z++){let L=p[z],oe="raw",V=L.path;if(x==Sr&&(oe="markdown",tt(L.path)&&!L.forceRaw)){let _e=Q.extname(L.path),Le=L.path.replace(_e,".md");L.path=Le}let Y=a.indexOf(L.path),le=h.indexOf(L.path),be=y.indexOf(L.path);L.path=V,i.push(e(()=>W(Y,le,L,oe,z))),Y>=0&&(n.splice(Y,1),a.splice(Y,1)),le>=0&&(u.splice(le,1),h.splice(le,1)),be>=0&&(f.splice(be,1),y.splice(be))}const W=(z,L,oe,V="raw",Y)=>new Promise((le,be)=>{if(s.addEventListener("abort",j=>{S.info("aborted.....",j),be(new DOMException("Aborted","AbortError"))}),s.aborted)return S.info("aborted2....."),be(new DOMException("Aborted","AbortError"));let _e=z>=0,Le=L>=0;this.handlerLocalModifyDataSync(R,_e,Le,oe,V,P,_).then(j=>{S.info("gitutil-runLocalSyncTask:","res",j,"chunkIndex:",Y,"local - fileInfo:",oe,"romoteIndex:",z,"localIndex:",L),le()}).catch(j=>{S.info("runLocalSyncTask:",j,"stack:",j.stack),o[Y]=j.error,e.clearQueue(),be(new Jt(Ge.PROMISE_ERROR,"runLocalSyncTask",j,o))})});await Promise.all(i),i.length=0,S.info("remoteLatestModifyFile:",f);for(let z=0;z<f.length;z++){let L=f[z],oe="raw",V=L.path;if(x==Sr){if(Gt(L.path)&&!L.forceRaw){let be=Q.extname(L.path),_e=L.path.replace(be,".sy");L.path=_e,oe="markdown"}else if(tt(L.path))continue}let Y=h.indexOf(V),le=a.indexOf(V);L.path=V,L.updated=P.date,i.push(e(()=>X(le,Y,L,oe,z))),le>=0&&(n.splice(le,1),a.splice(le,1)),Y>=0&&(u.splice(Y,1),h.splice(Y,1))}const X=(z,L,oe,V="raw",Y)=>new Promise((le,be)=>{if(s.addEventListener("abort",j=>{S.info("aborted.....",j),be(new DOMException("Aborted","AbortError"))}),s.aborted)return S.info("aborted2....."),be(new DOMException("Aborted","AbortError"));let _e=oe.status.toLowerCase().trim()!="removed",Le=L>=0;this.handlerRemoteModifyDataSync(R,_e,Le,oe,V,P,_).then(j=>{S.info("gitutil-runRemoteSync:","res",j,"chunkIndex:",Y,"remote - fileInfo:",oe,"romoteIndex:",z,"localIndex:",L),le()}).catch(j=>{S.info("runRemoteSyncTask:",j,"stack:",j.stack),o[Y]=j.error,e.clearQueue(),be(new Jt(Ge.PROMISE_ERROR,"runRemoteSyncTask",j,o))})});await Promise.all(i),i.length=0;let Z=await this.commitAndPushFileToRemote(R,pi());if(S.info("commitResponse:",Z),Z.successed)this.settingUtils.setAndSave(De,Z.sha),this.settingUtils.setAndSave(rt,new Date().toLocaleString()),q.showMessage(this.i18n.fileSyncSuccess,ve,"info");else throw this.settingUtils.setAndSave(De,Z.sha),new Ht(Ge.FAILED,this.i18n.fileSyncFailed,null,Z)}catch(n){throw S.error(this.i18n.fileSyncFailed,n,"stack:",n.stack),t.abort("promise 任务出错"),n instanceof _r?n:new Ht(Ge.FAILED,this.i18n.fileSyncFailed,n,n.stack)}}async handleWorkSpaceModifyFileList(e=[""],t=!0,s="",i,o=[]){let n=new Array,a=this.settingUtils.get(Ii).split(";"),h=[...new Set(a.map(d=>d.trim().replace(/^\/+|\/+$/g,"").trim()).filter(d=>d.length>0)),...Xa,...o];i||(i=new Date(String(this.settingUtils.get(rt)).length==0?0:this.settingUtils.get(rt)));let p=i.getTime();for(let d of e){let f=new yp;if(d.endsWith(s)){let y=s.length;d=d.slice(0,d.length-y)}if(S.info("path:",d),f.push(d),!Ni(d,h))for(;!f.isEmpty();){let y=f.pop(),w=await Zi(y);for(let v of w??[]){let _="";y.trim().length==0?_=y+v.name:_=y+"/"+v.name;let F=new Date(v.updated).getTime()*1e3,A=new Date().getTime();if(F<A&&(v.updated=F),!Ni(_,h)){if(v.isDir)f.push(_);else if(v.name){let P=new Date(v.updated).getTime();t?P>p&&n.push({sha:"",type:"blob",name:v.name,path:_,status:Fr,updated:v.updated}):n.push({sha:"",type:"blob",name:v.name,path:_,status:Fr,updated:v.updated})}}}}}return S.info("workspaceModifyFiles:",n),n}async handlerLocalModifyDataSync(e,t,s,i,o="raw",n,a){let u="raw",h=i.path,p=i.status!=Rt;if(o=="markdown"&&tt(i.path)&&!i.forceRaw){let d=Q.extname(i.path),f=i.path.replace(d,".md");i.path=f,i.name=Q.basename(f),u="markdown"}if(S.info("handlerLocalModifyDataSync=============================",p,t,s),await Ps(i.path)){if(t&&p){let d=await this.getRepoFileContent(i.path,n.sha),f=new Date(n.date?n.date:0).getTime();if(new Date(i.updated).getTime()>=f){let w=await et(h,u),v=await w.arrayBuffer(),_={name:i.name,path:i.path,mode:"100644",type:d.type,sha:d.sha,size:w.size,encoding:this.encoding,content:v};e=await this.addFileToWorkArea(e,_,"update")}else await ue(h,!1,new Blob([d.content]),de,u,"update")}else if(!t&&p){let d=new Date(n.date?n.date:0).getTime(),f=new Date(i.updated).getTime();if(s)if(f>=d){let y=await et(h,u),w=await y.arrayBuffer(),v={name:i.name,path:i.path,mode:"100644",type:i.type,sha:"",size:y.size,encoding:this.encoding,content:w};e=await this.addFileToWorkArea(e,v,"create")}else await Dr(h);else{let y=await et(h,u),w=await y.arrayBuffer(),v={name:i.name,path:i.path,mode:"100644",type:i.type,sha:"",size:y.size,encoding:this.encoding,content:w};e=await this.addFileToWorkArea(e,v,"create")}}else if(t&&!p){let d=await this.getRepoFileContent(i.path,n.sha),f=new Date(n.date?n.date:0).getTime(),y=new Date(i.updated).getTime();if(s)if(y>=f){if(s){let w={path:i.path,mode:"100644",type:d.type,sha:d.sha,size:0,encoding:this.encoding,content:""};e=await this.addFileToWorkArea(e,w,"delete")}}else await ue(h,!1,new Blob([d.content]),de,u,"create");else await ue(h,!1,new Blob([d.content]),de,u,"create")}}else if(p&&!t&&!s){let d=await et(i.path,u),f=await d.arrayBuffer(),y={name:i.name,path:i.path,mode:"100644",type:i.type,sha:"",size:d.size,encoding:this.encoding,content:f};e=await this.addFileToWorkArea(e,y,"create")}else if(p&&t&&!s){let d=await this.getRepoFileContent(i.path,n.sha),f=await et(h,u),y=await f.text(),w=await new Blob([d.content]).text(),v=await Ur("",y,w);if(S.info("current merge（1,1,0）（文件本地有，远端有，上次提交没有）:",i.path,v),v.isConflict){if(this.settingUtils.get(mt)){let _=Q.extname(h),F=Q.basename(h,_);if(tt(h)){await ue(h,!1,new Blob([d.content]),de,u,"update");let A=await Or(F),P=await Ar(A.id);await ue(h,!1,f,de,u,"update"),await Pr(A.box,`${A.hpath}${this.generateConflictPrefix()}`,P.kramdown)}else{let A=`${F}${this.generateConflictPrefix()}${_}`,P=Q.basename(i.path),R=i.path.replace(P,A);S.info("confilctFileName",A,"oldFileName",P,"confilctPath",R),await ue(R,!1,new Blob([d.content]),de,u,"create")}}throw new Mr(dr.CONFLICT,h,this.i18n.fileConflictInfo)}else{let _=new Blob([v.content]),F=await _.arrayBuffer();await ue(h,!1,_,de,u,"update");let A={name:i.name,path:i.path,mode:"100644",type:d.type,sha:d.sha,size:_.size,encoding:this.encoding,content:F};e=await this.addFileToWorkArea(e,A,"update")}}else if(p&&t&&s){let d=await this.getRepoFileContent(i.path,n.sha),f=await this.getRepoFileContent(i.path,a.sha),y=await et(h,u),w=await y.text(),v=await new Blob([f.content]).text(),_=await new Blob([d.content]).text(),F=await Ur(v,w,_);if(S.info("current merge（1,1,1）（文件本地有，远端有，上次提交有）:",i.path,F),F.isConflict){if(this.settingUtils.get(mt)){let A=Q.extname(h),P=Q.basename(h,A);if(tt(h)){await ue(h,!1,new Blob([d.content]),de,u,"update");let R=await Or(P),O=await Ar(R.id);await ue(h,!1,y,de,u,"update"),await Pr(R.box,`${R.hpath}${this.generateConflictPrefix()}`,O.kramdown)}else{let R=`${P}${this.generateConflictPrefix()}${A}`,O=Q.basename(i.path),G=i.path.replace(O,R);S.info("confilctFileName",R,"oldFileName",O,"confilctPath",G),await ue(G,!1,new Blob([d.content]),de,u,"create")}}throw new Mr(dr.CONFLICT,h,this.i18n.fileConflictInfo)}else{let A=new Blob([F.content]),P=await A.arrayBuffer();await ue(h,!1,A,de,u,"update");let R={name:i.name,path:i.path,mode:"100644",type:d.type,sha:d.sha,size:A.size,encoding:this.encoding,content:P};e=await this.addFileToWorkArea(e,R,"update")}}else if(p&&!t&&s){let d=new Date(i.updated).getTime(),f=new Date(n.date?n.date:0).getTime();if(d>=f){let y=await et(h,u),w=await y.arrayBuffer(),v={name:i.name,path:i.path,mode:"100644",type:i.type,sha:"",size:y.size,encoding:this.encoding,content:w};e=await this.addFileToWorkArea(e,v,"create")}else await Dr(h)}else if(!p&&t&&s){let d=new Date(i.updated).getTime(),f=new Date(n.date?n.date:0).getTime(),y=await this.getRepoFileContent(i.path,n.sha);if(d>=f){let w={name:i.name,path:i.path,mode:"100644",type:y.type,sha:y.sha,size:0,encoding:this.encoding,content:""};e=await this.addFileToWorkArea(e,w,"delete")}else await ue(h,!1,new Blob([y.content]),de,u,"create")}else if(!p&&t&&!s){let d=await this.getRepoFileContent(i.path,n.sha),f=i.type.toLowerCase()=="tree";await ue(h,f,new Blob([d.content]),de,u,"create")}}async handlerRemoteModifyDataSync(e,t,s,i,o="raw",n,a){let u="raw",h=i.path,p=i.name;if(o=="markdown"&&Gt(i.path)&&!i.forceRaw){let f=Q.extname(i.path),y=i.path.replace(f,".sy");i.path=y,u="markdown",i.name=Q.basename(y)}let d=await al(i.path);if(S.info("handlerRemoteModifyDataSync=============================",d,t,s),await Ps(i.path)){if(t&&d.isExist){let f=new Date(i.updated).getTime(),y=new Date(d.updated).getTime();if(f>y){let w=await this.getRepoFileContent(h,n.sha);await ue(i.path,!1,new Blob([w.content]),de,u,"update")}else{let w=await et(i.path,u),v=await w.arrayBuffer(),_={name:p,path:h,mode:"100644",type:i.type,sha:i.sha,size:w.size,encoding:this.encoding,content:v};e=await this.addFileToWorkArea(e,_,"update")}}else if(!t&&d.isExist){let f=new Date(i.updated).getTime(),y=new Date(d.updated).getTime();if(s)if(f>y)await Dr(i.path);else{let w=await et(i.path,u),v=await w.arrayBuffer(),_={name:p,path:h,mode:"100644",type:i.type,sha:"",size:w.size,encoding:this.encoding,content:v};e=await this.addFileToWorkArea(e,_,"create")}else{let w=await et(i.path,u),v=await w.arrayBuffer(),_={name:p,path:h,mode:"100644",type:i.type,sha:"",size:w.size,encoding:this.encoding,content:v};e=await this.addFileToWorkArea(e,_,"create")}}else if(t&&!d.isExist){let f=new Date(i.updated).getTime(),y=new Date(a.date).getTime()+Es;if(s)if(f>y){let w=await this.getRepoFileContent(h,n.sha);await ue(i.path,!1,new Blob([w.content]),de,u,"create")}else{let w={name:p,path:h,mode:"100644",type:i.type,sha:i.sha,size:0,encoding:this.encoding,content:""};e=await this.addFileToWorkArea(e,w,"delete")}else{let w=await this.getRepoFileContent(h,n.sha);await ue(i.path,!1,new Blob([w.content]),de,u,"create")}}}else if(t&&!d.isExist&&!s){let f=await this.getRepoFileContent(h,n.sha),y=i.type.toLowerCase()=="tree";await ue(i.path,y,new Blob([f.content]),de,u,"create")}else if(t&&d.isExist&&!s){let f=await this.getRepoFileContent(h,n.sha),y=await et(i.path,u),w=await y.text(),v=await new Blob([f.content]).text(),_=await Ur("",w,v);if(S.info("remote merge(1,1,0)（文件远端有，本地有，上次提交没有）：",i.path,_),_.isConflict){if(this.settingUtils.get(mt)){let F=Q.extname(i.path),A=Q.basename(i.path,F);if(tt(i.path)){await ue(i.path,!1,new Blob([f.content]),de,u,"update");let P=await Or(A),R=await Ar(P.id);await ue(i.path,!1,y,de,u,"update"),await Pr(P.box,`${P.hpath}${this.generateConflictPrefix()}`,R.kramdown)}else{let P=`${A}${this.generateConflictPrefix()}${F}`,R=Q.basename(i.path),O=i.path.replace(R,P);S.info("confilctFileName",P,"oldFileName",R,"confilctPath",O),await ue(O,!1,new Blob([f.content]),de,u,"create")}}throw new Mr(dr.CONFLICT,i.path,this.i18n.fileConflictInfo)}else{let F=new Blob([_.content]),A=await F.arrayBuffer();await ue(i.path,!1,F,de,u,"update");let P={name:p,path:h,mode:"100644",type:f.type,sha:f.sha,size:F.size,encoding:this.encoding,content:A};e=await this.addFileToWorkArea(e,P,"update")}}else if(t&&d.isExist&&s){let f=await this.getRepoFileContent(h,n.sha),y=await this.getRepoFileContent(h,a.sha),w=await et(i.path,u),v=await w.text(),_=await new Blob([y.content]).text(),F=await new Blob([f.content]).text(),A=await Ur(_,v,F);if(S.info("remote merge(1,1,1)（文件远端有，本地有，上次提交有）：",i.path,A),A.isConflict){if(this.settingUtils.get(mt)){let P=Q.extname(i.path),R=Q.basename(i.path,P);if(tt(i.path)){await ue(i.path,!1,new Blob([f.content]),de,u,"update");let O=await Or(R),G=await Ar(O.id);await ue(i.path,!1,w,de,u,"update"),await Pr(O.box,`${O.hpath}${this.generateConflictPrefix()}`,G.kramdown)}else{let O=`${R}${this.generateConflictPrefix()}${P}`,G=Q.basename(i.path),x=i.path.replace(G,O);S.info("confilctFileName",O,"oldFileName",G,"confilctPath",x),await ue(x,!1,new Blob([f.content]),de,u,"create")}}throw new Mr(dr.CONFLICT,i.path,this.i18n.fileConflictInfo)}else{let P=new Blob([A.content]),R=await P.arrayBuffer();await ue(i.path,!1,P,de,u,"update");let O={name:p,path:h,mode:"100644",type:f.type,sha:f.sha,size:P.size,encoding:this.encoding,content:R};e=await this.addFileToWorkArea(e,O,"update")}}else if(t&&!d.isExist&&s){let f=new Date(a.date).getTime()+Es;if(new Date(i.updated).getTime()>f){let w=await this.getRepoFileContent(h,n.sha);await ue(i.path,!1,new Blob([w.content]),de,u,"create")}else{let w={name:p,path:h,mode:"100644",type:i.type,sha:i.sha,size:0,encoding:this.encoding,content:""};e=await this.addFileToWorkArea(e,w,"delete")}}else if(!t&&d.isExist&&!s){let f=await et(i.path,u),y=await f.arrayBuffer(),w={name:p,path:h,mode:"100644",type:i.type,sha:"",size:f.size,encoding:this.encoding,content:y};e=await this.addFileToWorkArea(e,w,"create")}else if(!t&&d.isExist&&s){let f=new Date(d.updated).getTime();if(new Date(i.updated).getTime()>f)await Dr(i.path);else{let w=await et(h,u),v=await w.arrayBuffer(),_={name:p,path:h,mode:"100644",type:i.type,sha:"",size:w.size,encoding:this.encoding,content:v};e=await this.addFileToWorkArea(e,_,"create")}}}async getCommitsByRef(e,t){const{since:s,until:i,per_page:o,page:n}=t||{};let a=new Array,u;try{u=await this.octokit.rest.repos.listCommits({owner:this.owner,repo:this.repo,sha:e,since:s,until:i,per_page:o,page:n}),u.data.forEach(p=>{a.push({name:this.branch,sha:p.sha,message:p.commit.message,author:p.commit.author.name,email:p.commit.author.email,date:p.commit.author.date,tree:{sha:p.commit.tree.sha,url:p.commit.tree.url},files:p.files,parents:p.parents})}),S.info("getCommitsByRef:",u)}catch(h){throw new Fe(ne.GIT,"getCommitsByRef",this.i18n.getCommitsFailed,`ref:${e}-params:${t}`,u,h)}return a}async getCommitsInTimeRange(e,t,s){const{since:i,until:o,per_page:n,page:a}=e||{};let u=new Array,h;try{h=await this.octokit.rest.repos.listCommits({owner:this.owner,repo:this.repo,path:s,sha:t,since:i,until:o,per_page:n,page:a}),h.data.forEach(d=>{u.push({name:this.branch,sha:d.sha,message:d.commit.message,author:d.commit.author.name,email:d.commit.author.email,date:d.commit.author.date,tree:{sha:d.commit.tree.sha,url:d.commit.tree.url},files:d.files,parents:d.parents})}),S.info("async getCommitsInTimeRange:",h)}catch(p){throw new Fe(ne.GIT,"getCommitsInTimeRange",this.i18n.getCommitsFailed,`ref:${t}-params:${e}-path:${s}`,h,p)}return u}async getBranchesAndCommits(e,t){const{since:s,until:i,per_page:o,page:n}=t||{};let a=new Array,u;try{for(const h of e){const p=h.name;u=await this.octokit.rest.repos.listCommits({owner:this.owner,repo:this.repo,sha:p,since:s,until:i,per_page:o,page:n}),u.data.forEach(f=>{a.push({name:p,sha:f.sha,message:f.commit.message,author:f.commit.author.name,email:f.commit.author.email,date:f.commit.author.date,tree:{sha:f.commit.tree.sha,url:f.commit.tree.url},files:f.files,parents:f.parents})}),S.info("getBranchesAndCommits:",u)}}catch(h){throw new Fe(ne.GIT,"getBranchesAndCommits",this.i18n.getCommitsFailed,`branches:${e}-params:${t}`,u,h)}return a}async getBranches(e){const{since:t,until:s,per_page:i,page:o}=e||{},n=new Array;let a;try{a=await this.octokit.rest.repos.listBranches({owner:this.owner,repo:this.repo,since:t,until:s,per_page:i,page:o}),a.data.forEach(u=>{n.push({name:u.name,sha:u.commit.sha,url:u.commit.url,protected:u.protected,protection:u.protection,protection_url:u.protection_url})}),S.info("getBranches:",a)}catch(u){throw new Fe(ne.GIT,"getBranches",this.i18n.getBranchFailed,`params:${e}`,a,u)}return n}async getRepoFileListByPath(e="",t){const s=new Array;let i;try{i=await this.octokit.rest.repos.getContent({owner:this.owner,repo:this.repo,path:e,ref:t}),i&&i.data.forEach(o=>{s.push({name:o.name,path:o.path,type:o.type,sha:o.sha,size:o.size,htmlUrl:o.html_url,downloadUrl:o.download_url})}),S.info("getRepoFileListByPath:",i)}catch(o){throw new Fe(ne.GIT,"getRepoFileListByPath",this.i18n.getRepoFileFailed,`ref:${t}-path:${e}`,i,o)}return s}async createPullRequest(e,t,s,i){let o,n;try{n=await this.octokit.rest.pulls.create({owner:this.owner,repo:this.repo,title:s,head:e,base:t,body:i}),o={code:n.status,message:`${this.i18n.createPullRequestSuccess}`,data:n.data},S.info("createPullRequest:",n)}catch(a){throw o={code:500,message:`${this.i18n.createPullRequestFailed}`,data:a},new Fe(ne.GIT,"createPullRequest",this.i18n.createPullRequestFailed,`sourceBranch:${e}-targetBranch:${t}-title:${s}-body:${i}`,n,a)}return o}async deleteFile(e,t,s,i){let o,n;try{n=await this.octokit.rest.repos.deleteFile({owner:this.owner,repo:this.repo,path:e,message:s,sha:t,branch:i}),S.info("deleteFile:",n),o={code:n.status,message:`${this.i18n.deleteFileSuccess}`,data:n.data}}catch(a){throw o={code:500,message:`${this.i18n.deleteFileFailed}`,data:a},new Fe(ne.GIT,"deleteFile",this.i18n.deleteFileFailed,`filePath:${e}-sha:${t}-commitMessage:${s}-branch:${i}`,n,a)}return o}async compareCommitFiles(e,t){S.info("local:",e,"remote:",t);let s=new Array,i;try{i=await this.octokit.rest.repos.compareCommits({owner:this.owner,repo:this.repo,base:e,head:t}),S.info("compareCommitFiles:",i),i.data.files.forEach(n=>{let a=n.filename.lastIndexOf("/"),u=n.filename.slice(a+1,n.filename.length).trim();s.push({name:u,path:n.filename,type:"blob",status:n.status,sha:n.sha,htmlUrl:n.blob_url,updated:i.data.commits[0].commit.author.date})})}catch(o){throw new Fe(ne.GIT,"compareCommitFiles",this.i18n.compareBranchFailed,`baseRef:${e}-headRef:${t}`,i,o)}return s}async getGitTreeByBranch(e){const t=new Array;let s;try{s=await this.octokit.rest.git.getTree({owner:this.owner,repo:this.repo,tree_sha:e,recursive:"1"}),s.data.tree.forEach(i=>{t.push({mode:i.mode,path:i.path,sha:i.sha,size:i.size,type:i.type,url:i.url})}),S.info("getGitTreeByBranch:",s)}catch(i){throw new Fe(ne.GIT,"getGitTreeByBranch",this.i18n.getGitTreeFailed,`branch:${e}`,s,i)}return t}async getGitTreeBySha(e){const t=new Array;let s;try{s=await this.octokit.rest.git.getTree({owner:this.owner,repo:this.repo,tree_sha:e,recursive:"1"}),s.data.tree.forEach(i=>{t.push({mode:i.mode,path:i.path,sha:i.sha,size:i.size,type:i.type,url:i.url})}),S.info("getGitTreeBySha:",s)}catch(i){throw new Fe(ne.GIT,"getGitTreeBySha",this.i18n.getGitTreeFailed,`sha:${e}`,s,i)}return t}async getBranchInfo(e){let t;try{return t=await this.octokit.repos.getBranch({owner:this.owner,repo:this.repo,branch:e}),S.info("getBranchInfo:",t),t}catch(s){throw new Fe(ne.GIT,"getBranchInfo",this.i18n.getBranchFailed,`branch:${e}`,t,s)}}async getCommitInfo(e){let t=null,s;try{return s=await this.octokit.repos.getCommit({owner:this.owner,repo:this.repo,ref:e}),t={name:e,sha:s.data.sha,message:s.data.commit.message,author:s.data.commit.author.name,email:s.data.commit.author.email,date:s.data.commit.author.date,tree:s.data.commit.tree,files:s.data.files,parents:s.data.parents},S.info(`getCommitInfo ${e}:`,s),t}catch(i){throw new Fe(ne.GIT,"getCommitInfo",this.i18n.getCommitsFailed,`ref:${e}`,s,i)}return t}async getInitialCommit(e){let t=null,s=null;try{let i=1;if(this.baseUrl==Po?(s=await this.octokit.rest.repos.listCommits({owner:this.owner,repo:this.repo,ref:e,per_page:1,page:1}),S.info("gitee init:",s),i=Number(s.headers.total_page)??1,(!i||isNaN(i))&&(i=Number(s.headers.total_count)??1)):this.baseUrl==Fo&&(s=await this.octokit.graphql(`
-          query($owner: String!, $repo: String!, $branch: String!) {
-            repository(owner: $owner, name: $repo) {
-              object(expression: $branch) {
-                ... on Commit {
-                  history(first: 1) {
-                    totalCount
-                  }
-                }
-              }
-            }
-          }
-        `,{owner:this.owner,repo:this.repo,branch:this.branch}),i=Number(s.repository.object.history.totalCount)),s=await this.octokit.rest.repos.listCommits({owner:this.owner,repo:this.repo,ref:e,per_page:1,page:i}),S.info(`getInitialCommit ${e}:`,s),s.data.length>0){let o=s.data[0];t={name:e,sha:o.sha,message:o.commit.message,author:o.commit.author.name,email:o.commit.author.email,date:o.commit.author.date,tree:o.commit.tree,files:o.files,parents:o.parents}}return t}catch(i){throw new Fe(ne.GIT,"getInitialCommit",this.i18n.getCommitsFailed,`ref:${e}`,s,i)}return t}}He([we()],xe.prototype,"handleRemoteDataCoverPolicy");He([we({rethrow:!0})],xe.prototype,"handleRemoteCoverLocal");He([we()],xe.prototype,"handleLocalDataCoverPolicy");He([we({rethrow:!0})],xe.prototype,"handleLocalCoverRemote");He([we({rethrow:!0})],xe.prototype,"handleAutoRemoteAndLocalFileSync");He([we()],xe.prototype,"handlerLocalModifyDataSync");He([we()],xe.prototype,"handlerRemoteModifyDataSync");He([we()],xe.prototype,"getCommitsByRef");He([we()],xe.prototype,"getCommitsInTimeRange");He([we()],xe.prototype,"getBranchesAndCommits");He([we()],xe.prototype,"getBranches");He([we()],xe.prototype,"getRepoFileListByPath");He([we()],xe.prototype,"createPullRequest");He([we()],xe.prototype,"deleteFile");He([we()],xe.prototype,"compareCommitFiles");He([we()],xe.prototype,"getGitTreeByBranch");He([we()],xe.prototype,"getGitTreeBySha");He([we()],xe.prototype,"getBranchInfo");He([we()],xe.prototype,"getCommitInfo");He([we()],xe.prototype,"getInitialCommit");const Dp=new Error("request for lock canceled");var Gp=function(r,e,t,s){function i(o){return o instanceof t?o:new t(function(n){n(o)})}return new(t||(t=Promise))(function(o,n){function a(p){try{h(s.next(p))}catch(d){n(d)}}function u(p){try{h(s.throw(p))}catch(d){n(d)}}function h(p){p.done?o(p.value):i(p.value).then(a,u)}h((s=s.apply(r,e||[])).next())})};class Up{constructor(e,t=Dp){this._value=e,this._cancelError=t,this._queue=[],this._weightedWaiters=[]}acquire(e=1,t=0){if(e<=0)throw new Error(`invalid weight ${e}: must be positive`);return new Promise((s,i)=>{const o={resolve:s,reject:i,weight:e,priority:t},n=la(this._queue,a=>t<=a.priority);n===-1&&e<=this._value?this._dispatchItem(o):this._queue.splice(n+1,0,o)})}runExclusive(e){return Gp(this,arguments,void 0,function*(t,s=1,i=0){const[o,n]=yield this.acquire(s,i);try{return yield t(o)}finally{n()}})}waitForUnlock(e=1,t=0){if(e<=0)throw new Error(`invalid weight ${e}: must be positive`);return this._couldLockImmediately(e,t)?Promise.resolve():new Promise(s=>{this._weightedWaiters[e-1]||(this._weightedWaiters[e-1]=[]),Ip(this._weightedWaiters[e-1],{resolve:s,priority:t})})}isLocked(){return this._value<=0}getValue(){return this._value}setValue(e){this._value=e,this._dispatchQueue()}release(e=1){if(e<=0)throw new Error(`invalid weight ${e}: must be positive`);this._value+=e,this._dispatchQueue()}cancel(){this._queue.forEach(e=>e.reject(this._cancelError)),this._queue=[]}_dispatchQueue(){for(this._drainUnlockWaiters();this._queue.length>0&&this._queue[0].weight<=this._value;)this._dispatchItem(this._queue.shift()),this._drainUnlockWaiters()}_dispatchItem(e){const t=this._value;this._value-=e.weight,e.resolve([t,this._newReleaser(e.weight)])}_newReleaser(e){let t=!1;return()=>{t||(t=!0,this.release(e))}}_drainUnlockWaiters(){if(this._queue.length===0)for(let e=this._value;e>0;e--){const t=this._weightedWaiters[e-1];t&&(t.forEach(s=>s.resolve()),this._weightedWaiters[e-1]=[])}else{const e=this._queue[0].priority;for(let t=this._value;t>0;t--){const s=this._weightedWaiters[t-1];if(!s)continue;const i=s.findIndex(o=>o.priority<=e);(i===-1?s:s.splice(0,i)).forEach(o=>o.resolve())}}}_couldLockImmediately(e,t){return(this._queue.length===0||this._queue[0].priority<t)&&e<=this._value}}function Ip(r,e){const t=la(r,s=>e.priority<=s.priority);r.splice(t+1,0,e)}function la(r,e){for(let t=r.length-1;t>=0;t--)if(e(r[t]))return t;return-1}var xp=function(r,e,t,s){function i(o){return o instanceof t?o:new t(function(n){n(o)})}return new(t||(t=Promise))(function(o,n){function a(p){try{h(s.next(p))}catch(d){n(d)}}function u(p){try{h(s.throw(p))}catch(d){n(d)}}function h(p){p.done?o(p.value):i(p.value).then(a,u)}h((s=s.apply(r,e||[])).next())})};class ca{constructor(e){this._semaphore=new Up(1,e)}acquire(){return xp(this,arguments,void 0,function*(e=0){const[,t]=yield this._semaphore.acquire(1,e);return t})}runExclusive(e,t=0){return this._semaphore.runExclusive(()=>e(),1,t)}isLocked(){return this._semaphore.isLocked()}waitForUnlock(e=0){return this._semaphore.waitForUnlock(1,e)}release(){this._semaphore.isLocked()&&this._semaphore.release()}cancel(){return this._semaphore.cancel()}}var Lp=Object.defineProperty,Bp=Object.getOwnPropertyDescriptor,Qr=(r,e,t,s)=>{for(var i=Bp(e,t),o=r.length-1,n;o>=0;o--)(n=r[o])&&(i=n(e,t,i)||i);return i&&Lp(e,t,i),i},Ct;const ai=(Ct=class extends xe{constructor(t){super();H(this,"token");H(this,"name");H(this,"encoding",Na);H(this,"mutex",new ca);this.name=t}static getInstance(t,s,i,o){return Ct.instance||(Ct.instance=new Ct(t)),Ct.instance&&Ct.instance.initData(s,i,o),Ct.instance}initData(t,s,i){this.settingUtils=s,this.i18n=i,this.owner=t.owner,this.repo=t.repo,this.token=this.settingUtils.get(Bs),this.branch=this.settingUtils.get(Ls),this.baseUrl=Fo,this.octokit=new oa({auth:this.token,baseUrl:this.baseUrl}),S.info("GITHUB仓库信息：",this.repo,"-",this.token,"-",this.owner,"-",this.branch)}generateConflictPrefix(){return qa()}async getRepoFileContent(t,s){let i,o;try{o=await this.octokit.rest.repos.getContent({owner:this.owner,repo:this.repo,path:t,ref:s,mediaType:{format:Ro}}),S.info("getRepoFileContent:",o);let n=o.data;i={name:n.name,path:n.path,type:n.type,sha:n.sha,size:n.size,htmlUrl:n.html_url,downloadUrl:n.download_url,encoding:n.encoding,content:Yr.Buffer.from(n.content,this.encoding)}}catch(n){throw new Fe(ne.GIT_FETCH,"getRepoFileContent",this.i18n.getFileContentFailed,`filePath:${t}-ref:${s}`,o,n)}return i}async createOrUpdateFile(t,s,i,o,n){let a,u;try{let h;if(!n)try{u=await this.octokit.rest.repos.getContent({owner:this.owner,repo:this.repo,path:t,ref:o}),h=u.data&&u.data.sha?u.data.sha:void 0}catch(d){if(d.status!=404)throw new Fe(ne.GIT_FETCH,"createOrUpdateFile-getContent",this.i18n.fileCreateUpdateSuccess,`filePath:${t}-content:${s}-commitMessage:${i}-branch:${o}-blobSha:${n}`,u,d)}const p=Yr.Buffer.from(s).toString(this.encoding);u=await this.octokit.rest.repos.createOrUpdateFileContents({owner:this.owner,repo:this.repo,path:t,message:i,content:p,sha:h,branch:o}),S.info("createOrUpdateFile:",u),a={code:u.status,message:`${this.i18n.fileCreateUpdateSuccess}`,data:u.data}}catch(h){throw a={code:500,message:`${this.i18n.fileCreateUpdateFailed}`,data:h},new Fe(ne.GIT_FETCH,"createOrUpdateFile",this.i18n.fileCreateUpdateFailed,`filePath:${t}-content:${s}-commitMessage:${i}-branch:${o}-blobSha:${n}`,u,h)}return a}async addFileToWorkArea(t,s,i){try{__gSyncFlow&&__gSyncFlow.trackFile(i,s&&s.path?s.path:"")}catch(e){}if(S.info("addFileToWorkArea:",t.size,s,"operate:",i),i=="delete"){let o={path:s.path,mode:s.mode,type:"blob",sha:null,size:0,operate:i};t.workTrees.push(o),t.size+=s.size}else if(i=="create"||i=="update"){let o=s.size;if(o>=xi)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${xi}MB`);{if(t.size+o>On){const a=await this.mutex.acquire();try{t.slice<0&&(t.slice=0),S.info("----addFileToWorkArea----");let u=await this.commitAndPushFileToRemote(t,`${new Date}_${t.slice}`);if(u.successed)t.slice+=1,t.size=0,t.latestCommitSha=u.sha,t.latestTreeSha=u.tree.sha,t.workTrees.length=0,this.settingUtils.setAndSave(De,u.sha);else throw new Fe(ne.GIT_COMMIT_PUSH,"addFileToWorkArea-commitAndPushFileToRemote",`${this.i18n.fileSyncFailed} ${new Date}_${t.slice} ${this.i18n.fileSliceCommitFailed}`,t,u)}finally{a()}}let n;const __rawSize=Number(s.size)||0,__encodedSize=Math.ceil(__rawSize/3)*4,__requestSize=__encodedSize+2048,__limit=Number(this.settingUtils.get("sgsp_blob_request_limit"))||33554432;if(__requestSize>__limit)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${Math.round(__requestSize/1048576)}MB`);try{if(n=await this.octokit.rest.git.createBlob({owner:this.owner,repo:this.repo,content:Yr.Buffer.from(s.content).toString(s.encoding),encoding:s.encoding}),S.info("createBlob:",n),n.status==201||n.status==200){let a={path:s.path,mode:s.mode,type:"blob",sha:n.data.sha,size:s.size,operate:i};t.workTrees.push(a),t.size+=o}else throw new Fe(ne.GIT_BLOB,s.path,this.i18n.createFileTreeFailed,s,n)}catch(err){const __wrapped=new Fe(ne.GIT_BLOB,s.path,this.i18n.createFileTreeFailed,s,n);__wrapped.cause=err;throw __wrapped}}}return t}async commitAndPushFileToRemote(t,s){const i=async(o,n,a)=>{let u,{data:h}=await this.octokit.rest.git.createTree({owner:this.owner,repo:this.repo,base_tree:n,tree:a});const{data:p}=await this.octokit.rest.git.createCommit({owner:this.owner,repo:this.repo,message:s,tree:h.sha,parents:[o]});let d=await this.octokit.rest.git.updateRef({owner:this.owner,repo:this.repo,ref:`heads/${this.branch}`,sha:p.sha});S.info("commitAndPushFileToRemote:",d);let f=d!=null&&d.status?d.status:500;if(f==200||f==201)u={successed:!0,branch:this.branch,sha:p.sha,url:d.url,tree:{sha:h.sha,url:h.url}};else throw new Fe(ne.GIT_COMMIT_PUSH,"commitAndPushFileToRemote-commitAndPushTask",`updateRef failed:${this.branch}`,t,d);return u};S.info("workArea:",t,t.workTrees.length);try{if(t.workTrees.length>0){let o=new Array,n=0,a;for(let u=0;u<t.workTrees.length;u++){let h=t.workTrees[u];n+h.size>=On&&(a=await i(t.latestCommitSha,t.latestTreeSha,o),a.successed&&(t.latestCommitSha=a.sha,t.latestTreeSha=a.tree.sha,t.slice+=1,n=0,o.length=0));let{path:p,mode:d,type:f,sha:y}=h;o.push({path:p,mode:d,type:f,sha:y}),n+=h.size,S.info("workTrees",o)}return o.length>0&&(a=await i(t.latestCommitSha,t.latestTreeSha,o)),a}else return{successed:!0,branch:this.branch,sha:t.latestCommitSha,url:"",tree:{sha:t.latestTreeSha,url:""}}}catch(o){let n=await this.getCommitInfo(this.branch);throw this.settingUtils.setAndSave(De,n.sha),new Fe(ne.GIT_COMMIT_PUSH,"commitAndPushFileToRemote-commitAndPushTask",this.i18n.fileSyncFailed,t,n,o)}}},H(Ct,"instance"),Ct);Qr([we()],ai.prototype,"getRepoFileContent");Qr([we()],ai.prototype,"createOrUpdateFile");Qr([we()],ai.prototype,"addFileToWorkArea");let Mp=ai;var kt;const li=(kt=class extends xe{constructor(t){super();H(this,"token");H(this,"name");H(this,"encoding",ja);H(this,"mutex",new ca);this.name=t}static getInstance(t,s,i,o){return kt.instance||(kt.instance=new kt(t)),kt.instance&&kt.instance.initData(s,i,o),kt.instance}initData(t,s,i){this.settingUtils=s,this.i18n=i,this.owner=t.owner,this.repo=t.repo,this.token=this.settingUtils.get(Bs),this.branch=this.settingUtils.get(Ls),this.baseUrl=Po,this.octokit=new oa({auth:this.token,baseUrl:this.baseUrl}),S.info("GITEE仓库信息：",this.repo,"-",this.token,"-",this.owner,"-",this.branch)}generateConflictPrefix(){return Wa()}async getRepoFileContent(t,s){let i,o;try{o=await this.octokit.rest.repos.getContent({owner:this.owner,repo:this.repo,path:t,ref:s,mediaType:{format:Ro}}),S.info("getRepoFileContent:",o);let n=o.data;i={name:n.name,path:n.path,type:n.type,sha:n.sha,size:n.size,htmlUrl:n.html_url,downloadUrl:n.download_url,encoding:n.encoding,content:Yr.Buffer.from(n.content,this.encoding)}}catch(n){throw new Fe(ne.GIT_FETCH,"getRepoFileContent",this.i18n.getFileContentFailed,`filePath:${t}-ref:${s}`,o,n)}return i}async createOrUpdateFile(t,s,i,o,n){let a,u;try{let h=Yr.Buffer.from(s).toString(this.encoding);if(S.info("contentBase64：",h),!h||h.length==0)return a={code:200,message:`${this.i18n.fileCreateUpdateFailed},${this.i18n.fileCreateUpdateEmpty}`,data:null},a;n?(u=await this.octokit.rest.repos.createOrUpdateFileContents({owner:this.owner,repo:this.repo,path:t,message:i,content:h,sha:n,branch:o}),S.info("✅ 文件创建/更新成功:",u),a={code:u.status,message:`${this.i18n.fileCreateUpdateSuccess}`,data:u.data}):(u=await this.octokit.request("POST /repos/{owner}/{repo}/contents/{path}",{owner:this.owner,repo:this.repo,path:t,message:i,content:h,branch:o}),S.info("✅ 文件创建/更新成功:",u),a={code:u.status,message:`${this.i18n.fileCreateUpdateSuccess}`,data:u.data})}catch(h){throw new Fe(ne.GIT_BLOB,t,this.i18n.fileCreateUpdateFailed,`filePath:${t}-content:${s}-commitMessage:${i}-branch:${o}-blobSha:${n}`,u,h)}return a}async addFileToWorkArea(t,s,i){try{__gSyncFlow&&__gSyncFlow.trackFile(i,s&&s.path?s.path:"")}catch(e){}if(S.info(""),i=="create"){let o={path:s.path,content:s.content,mode:s.mode,sha:s.sha,size:s.size,type:"blob",operate:i};t.workTrees.push(o),t.size+=s.size}else if(i=="delete"||i=="update"){let o=s.size;if(o>=La)throw new Jt(Ge.LIMITED,`${s.path} ${this.i18n.fileSizeOver} ${xi}MB`);if(t.size+o>Ba){const n=await this.mutex.acquire();try{t.slice<0&&(t.slice=0);let a=await this.commitAndPushFileToRemote(t,`${new Date}_${t.slice}`);if(a.successed)t.slice+=1,t.size=0,t.latestCommitSha=a.sha,t.latestTreeSha=a.tree.sha,t.workTrees.length=0,this.settingUtils.setAndSave(De,a.sha);else throw new Fe(ne.GIT_COMMIT_PUSH,"addFileToWorkArea-commitAndPushFileToRemote",`${this.i18n.fileSyncFailed}: ${new Date}_${t.slice} ${this.i18n.fileSliceCommitFailed}`,t,a)}finally{n()}}try{let n={path:s.path,content:s.content,mode:s.mode,sha:s.sha,size:s.size,type:"blob",operate:i};t.workTrees.push(n),t.size+=s.size}catch(n){throw new Fe(ne.GIT_BLOB,s.path,this.i18n.createFileTreeFailed,s,t,n)}}return t}async commitAndPushFileToRemote(t,s){let i;const o=Vr(Math.min(xa,navigator.hardwareConcurrency)),n=[],a=[],u=[],h=async(d,f)=>{let y;return d.operate=="delete"?y=await this.deleteFile(d.path,d.sha,s,f):(d.operate=="create"||d.operate=="update")&&(y=await this.createOrUpdateFile(d.path,d.content,s,f,d.sha)),y},p=(d,f,y)=>new Promise((w,v)=>{h(d,f).then(_=>{let F=_!=null&&_.status?_.status:_!=null&&_.code?_.code:500;F==201||F==200?u[y]=1:u[y]=0,w()}).catch(_=>{S.info("runCommitsTask:",_,"stack:",_.stack),a[y]=_.error,o.clearQueue(),v(new Jt(Ge.PROMISE_ERROR,"commitAndPushFileToRemote-runCommitsTask",_,a))})});await Promise.all(n),n.length=0,S.info("workArea:",t);try{if(t.workTrees.length>0){for(let y=0;y<t.workTrees.length;y++){let w=t.workTrees[y];n.push(o(()=>p(w,this.branch,y)))}await Promise.all(n),n.length=0;let d=u.reduce((y,w)=>y+w,0),f=await this.getCommitInfo(this.branch);S.info("commitAndPushFile:",f,d,t.workTrees.length,d==t.workTrees.length),d==t.workTrees.length?i={successed:!0,branch:this.branch,sha:f.sha,url:"",tree:{sha:f.tree.sha,url:f.tree.url}}:i={successed:!1,branch:this.branch,sha:f.sha,url:"",tree:{sha:f.tree.sha,url:""},message:JSON.stringify(f)}}else i={successed:!0,branch:this.branch,sha:t.latestCommitSha,url:"",tree:{sha:t.latestTreeSha,url:""}}}catch(d){Promise.allSettled(n);let f=await this.getCommitInfo(this.branch);throw this.settingUtils.setAndSave(De,f.sha),new Fe(ne.GIT_COMMIT_PUSH,"commitAndPushFileToRemote-commitAndPushTask",this.i18n.fileSyncFailed,t,f,d)}return i}},H(kt,"instance"),kt);Qr([we()],li.prototype,"getRepoFileContent");Qr([we()],li.prototype,"createOrUpdateFile");Qr([we()],li.prototype,"addFileToWorkArea");let Np=li;const Ri=(r,e,t)=>{if(r){let s=(r==null?void 0:r.get(So))??"",i=qc(s)??{host:"",owner:"",repo:""};switch(t=Number.parseInt(t+""),t){case Qi:return Mp.getInstance(Ga,i,r,e);case Ji:return Np.getInstance(Ua,i,r,e);default:return null}}return null},rr=class rr{constructor(e,t=1e3,...s){H(this,"timerHandler");H(this,"timeout");H(this,"args");H(this,"timerID");this.timerHandler=e,this.timeout=t,this.args=s,rr.timerTasks.add(this)}start(){try{this.timerID=setTimeout(this.timerHandler,this.timeout,this.args)}catch(e){S.error("TimerOnce-启动定时任务失败-start：",e,"stack:",e.stack)}return this.timerID}remove(e){try{if(e)clearTimeout(e),rr.timerTasks.delete(this);else{for(let t of rr.timerTasks)clearTimeout(t.timerID);rr.timerTasks.clear()}return!0}catch(t){return S.error("TimerOnce-移除定时任务失败-remove：",t,"stack:",t.stack),!1}}removeSelf(){try{return clearInterval(this.timerID),rr.timerTasks.delete(this),!0}catch(e){return S.error("TimerOnce-移除定时任务失败-removeSelf：",e,"stack:",e.stack),!1}}};H(rr,"timerTasks",new Set);let Wi=rr;const sr=class sr{constructor(e,t=1e3,...s){H(this,"timerHandler");H(this,"timeout");H(this,"args");H(this,"timerID");this.timerHandler=e,this.timeout=t,this.args=s,sr.timerTasks.add(this)}start(){try{this.timerID=setInterval(this.timerHandler,this.timeout,this.args)}catch(e){S.error("TimerEvery-启动定时任务失败-start:",e,"stack:",e.stack)}return this.timerID}remove(e){try{if(e)clearInterval(e),sr.timerTasks.delete(this);else{for(let t of sr.timerTasks)clearTimeout(t.timerID);sr.timerTasks.clear()}return!0}catch(t){return S.error("TimerEvery-移除定时任务失败-remove：",t,"stack:",t.stack),!1}}removeSelf(){try{return clearInterval(this.timerID),sr.timerTasks.delete(this),!0}catch(e){return S.error("TimerEvery-移除定时任务失败-removeSelf：",e,"stack:",e.stack),!1}}};H(sr,"timerTasks",new Set);let Vi=sr;const Yi=new Map;function jp(r,e,t){return function(s,i){const o=Yi.get(s.constructor)||[];o.push({sourceProp:i,targetClass:r,targetProp:e,options:t}),Yi.set(s.constructor,o)}}function $p(){return function(r){return class extends r{constructor(...t){super(...t);H(this,"__targetInstances",new Map);const s=Yi.get(r)||[];return new Proxy(this,{set:(i,o,n)=>{var u,h;i[o]=n;const a=s.find(p=>p.sourceProp===o);if(a){const p=(u=a.options)!=null&&u.deepCopy?is(n):n;let d=this.__targetInstances.get(o);d||(d=a.targetClass.getInstance(),this.__targetInstances.set(o,d)),d[a.targetProp]=p,(h=a.options)!=null&&h.bidirectional&&Object.defineProperty(d,a.targetProp,{set:f=>{i[o]!==f&&(i[o]=f)},enumerable:!0})}return!0},get:(i,o)=>i[o]})}}}}function is(r,e=new WeakMap){if(r===null||typeof r!="object")return r;if(e.has(r))return e.get(r);if(r instanceof Date)return new Date(r);if(r instanceof RegExp)return new RegExp(r);if(r instanceof Map)return new Map(Array.from(r,([s,i])=>[is(s),is(i)]));if(r instanceof Set)return new Set(Array.from(r,s=>is(s)));const t=Array.isArray(r)?[]:{};e.set(r,t);for(const s in r)Object.prototype.hasOwnProperty.call(r,s)&&(t[s]=is(r[s],e));return t}var zp=Object.defineProperty,Hp=Object.getOwnPropertyDescriptor,Yt=(r,e,t,s)=>{for(var i=s>1?void 0:s?Hp(e,t):e,o=r.length-1,n;o>=0;o--)(n=r[o])&&(i=(s?n(e,t,i):n(i))||i);return s&&i&&zp(e,t,i),i};exports.default=class extends q.Plugin{constructor(){super(...arguments);H(this,"settingUtils");H(this,"isMobile");H(this,"gitUtil");H(this,"timerTask");H(this,"topBarElement");H(this,"hasNewVersion",!1);H(this,"isGitSyncing",!1)}async onload(){S.info("onload");__gEnsureSyncFlow(this),__gSyncFlow&&await __gSyncFlow.onAfterLoad();try{br.getInstance()}catch{br.getInstance()}await Za(this.i18n),await this.initPluginConfigData()}async onLayoutReady(){S.info("onLayoutReady"),__gSyncFlow&&__gSyncFlow.attachBadge(),await this.registerPluginButton(),await this.initPluginLayoutData()}async onunload(){this.timerTask&&this.timerTask.remove()}async uninstall(){q.showMessage(this.i18n.byePlugin),xn()}async createIcons(){this.addIcons('<symbol id="iconGmailSync" viewBox="0 0 1024 1024"><path d="M998.4 627.2c-51.2 230.4-256 396.8-499.2 396.8-224 0-409.6-140.8-480-339.2h121.6c64 134.4 198.4 230.4 358.4 230.4 179.2 0 332.8-121.6 384-281.6l115.2-6.4zM499.2 0c224 0 409.6 140.8 480 339.2h-121.6c-64-134.4-198.4-230.4-358.4-230.4-179.2 0-332.8 121.6-384 281.6L0 396.8C51.2 172.8 256 0 499.2 0z" fill="#646A73" p-id="7486"></path><path d="M998.4 332.8c0 32-25.6 57.6-57.6 64h-140.8c-19.2 0-32-12.8-32-32v-51.2c0-19.2 12.8-32 32-32h83.2V32c0-12.8 12.8-25.6 25.6-32h57.6c19.2 0 32 12.8 32 32v300.8zM0 659.2c0-32 25.6-57.6 57.6-64h140.8c19.2 0 32 12.8 32 32v51.2c0 19.2-12.8 32-32 32H115.2V960c0 12.8-12.8 25.6-25.6 32H32c-19.2 0-32-12.8-32-32v-300.8z" fill="#646A73" p-id="7487"></path><path d="M665.6 569.6H512V473.6h249.6c12.8 0 12.8 0 12.8 6.4 6.4 70.4 0 134.4-38.4 192-38.4 57.6-96 96-160 108.8-83.2 19.2-166.4 0-236.8-51.2-57.6-44.8-89.6-102.4-96-172.8-19.2-147.2 64-275.2 204.8-313.6 89.6-19.2 172.8 0 243.2 57.6l6.4 6.4L620.8 384l-6.4-6.4c-25.6-25.6-64-38.4-108.8-38.4-83.2 0-153.6 64-160 147.2-12.8 89.6 44.8 172.8 134.4 192 51.2 12.8 96 6.4 140.8-25.6 19.2-19.2 38.4-44.8 44.8-76.8v-6.4z" fill="#646A73" p-id="7488"></path></symbol>'),this.addIcons('<symbol id="iconModeSync"  viewBox="0 0 1024 1024"><path d="M421.632 361.408V268.32c0-7.552 2.688-13.984 8.032-19.36s11.808-8.032 19.36-8.032h246.368c7.552 0 14.016 2.688 19.36 8.032s8.032 11.808 8.032 19.36v246.4a26.336 26.336 0 0 1-8.032 19.36 26.56 26.56 0 0 1-19.36 8.032h-93.088v202.592c0 10.592-3.744 19.584-11.264 27.104a37.056 37.056 0 0 1-27.104 11.232H219.008a37.12 37.12 0 0 1-27.104-11.232 36.864 36.864 0 0 1-11.264-27.104v-344.96c0-10.592 3.744-19.584 11.264-27.104 7.488-7.488 16.544-11.232 27.104-11.232h202.56z m0 60.256H279.296c-10.56 0-19.616 3.744-27.104 11.232a36.864 36.864 0 0 0-11.264 27.104v224.512c0 10.592 3.744 19.584 11.264 27.104 7.488 7.456 16.544 11.232 27.104 11.232h224.448c10.592 0 19.616-3.776 27.104-11.232 7.52-7.52 11.264-16.512 11.264-27.104v-142.368h-93.056a26.4 26.4 0 0 1-19.36-8.032 26.336 26.336 0 0 1-8.032-19.36v-93.088z m87.648-120.48c-7.552 0-14.016 2.688-19.36 8.032s-8.032 11.808-8.032 19.36v125.92c0 7.552 2.688 13.984 8.032 19.36a26.4 26.4 0 0 0 19.36 8.032h125.92a26.4 26.4 0 0 0 19.36-8.032 26.336 26.336 0 0 0 8.032-19.36v-125.952c0-7.552-2.656-13.984-8.032-19.36s-11.808-8.032-19.36-8.032h-125.888zM225.184 85.024l-49.92-28.832a30.112 30.112 0 1 1 30.112-52.16l104.32 60.224c14.4 8.32 19.328 26.752 11.04 41.152l-60.224 104.32a30.144 30.144 0 0 1-52.192-30.112l23.296-40.32c-40.448 15.52-74.816 37.44-103.104 65.728-42.72 42.72-71.328 99.744-85.888 171.072L0.032 333.504c14.752-71.552 43.36-128.544 85.856-171.04 36.224-36.224 82.656-62.016 139.328-77.44z m536.992 808.384l49.92 28.832a30.144 30.144 0 0 1-30.112 52.192l-104.32-60.224a30.144 30.144 0 0 1-11.04-41.152l60.224-104.32a30.144 30.144 0 0 1 52.192 30.112l-23.296 40.32c40.448-15.52 74.816-37.408 103.104-65.696 42.688-42.688 71.328-99.744 85.888-171.104l42.592 42.592c-14.752 71.52-43.36 128.544-85.856 171.04-36.224 36.224-82.656 62.016-139.328 77.44z" p-id="10215"></path></symbol>'),this.addIcons('<symbol id="iconStartSync" viewBox="0 0 1024 1024"><path d="M811.4 368.9C765.6 248 648.9 162 512.2 162S258.8 247.9 213 368.8C126.9 391.5 63.5 470.2 64 563.6 64.6 668 145.6 752.9 247.6 762c4.7 0.4 8.7-3.3 8.7-8v-60.4c0-4-3-7.4-7-7.9-27-3.4-52.5-15.2-72.1-34.5-24-23.5-37.2-55.1-37.2-88.6 0-28 9.1-54.4 26.2-76.4 16.7-21.4 40.2-36.9 66.1-43.7l37.9-10 13.9-36.7c8.6-22.8 20.6-44.2 35.7-63.5 14.9-19.2 32.6-36 52.4-50 41.1-28.9 89.5-44.2 140-44.2s98.9 15.3 140 44.3c19.9 14 37.5 30.8 52.4 50 15.1 19.3 27.1 40.7 35.7 63.5l13.8 36.6 37.8 10c54.2 14.4 92.1 63.7 92.1 120 0 33.6-13.2 65.1-37.2 88.6-19.5 19.2-44.9 31.1-71.9 34.5-4 0.5-6.9 3.9-6.9 7.9V754c0 4.7 4.1 8.4 8.8 8 101.7-9.2 182.5-94 183.2-198.2 0.6-93.4-62.7-172.1-148.6-194.9z" p-id="7534"></path><path d="M376.9 656.4c1.8-33.5 15.7-64.7 39.5-88.6 25.4-25.5 60-39.8 96-39.8 36.2 0 70.3 14.1 96 39.8 1.4 1.4 2.7 2.8 4.1 4.3l-25 19.6c-5.3 4.1-3.5 12.5 3 14.1l98.2 24c5 1.2 9.9-2.6 9.9-7.7l0.5-101.3c0-6.7-7.6-10.5-12.9-6.3L663 532.7c-36.6-42-90.4-68.6-150.5-68.6-107.4 0-195 85.1-199.4 191.7-0.2 4.5 3.4 8.3 8 8.3H369c4.2-0.1 7.7-3.4 7.9-7.7zM703 664h-47.9c-4.2 0-7.7 3.3-8 7.6-1.8 33.5-15.7 64.7-39.5 88.6-25.4 25.5-60 39.8-96 39.8-36.2 0-70.3-14.1-96-39.8-1.4-1.4-2.7-2.8-4.1-4.3l25-19.6c5.3-4.1 3.5-12.5-3-14.1l-98.2-24c-5-1.2-9.9 2.6-9.9 7.7l-0.4 101.4c0 6.7 7.6 10.5 12.9 6.3l23.2-18.2c36.6 42 90.4 68.6 150.5 68.6 107.4 0 195-85.1 199.4-191.7 0.2-4.5-3.4-8.3-8-8.3z" p-id="7535"></path></symbol>'),this.addIcons('<symbol id="iconRangeSync" viewBox="0 0 1024 1024"><path d="M924.352 515.04H314.112c-23.36 0-50.912 17.088-61.184 38.016L88.832 885.504c-10.304 20.96 0.352 38.048 23.648 38.048h610.304c23.36 0 50.88-17.088 61.184-38.048l164.16-332.448c10.24-20.928-0.352-38.048-23.744-38.048z m-610.24-42.528h453.056v-1.568h58.88V100.448H282.112v66.336H181.568v152.512H125.632a53.888 53.888 0 0 0-53.632 53.6v450.752l142.88-289.408c17.28-35.136 60.064-61.728 99.232-61.728zM228.896 214.048h53.216v209.6H228.896v-209.6z m549.888-66.304v275.872H329.472V147.744h449.312z" p-id="7422"></path></symbol>'),this.addIcons('<symbol id="iconStrategySync"  viewBox="0 0 1024 1024"><path d="M34.133333 34.133333v955.733334a34.133333 34.133333 0 0 0 34.133334 34.133333h846.097066c41.642667 0 75.434667-34.542933 75.434667-77.073067V77.0048C989.7984 34.474667 956.0064 0 914.363733 0H68.266667a34.133333 34.133333 0 0 0-34.133334 34.133333z m855.04 68.539734v818.517333H134.7584V102.741333h754.414933z" fill="#5B5B5B" p-id="5371"></path><path d="M343.313067 235.997867L311.637333 204.8 238.933333 276.48l72.704 71.4752 31.675734-31.197867-40.96-40.277333 40.96-40.482133z m194.013866 0l40.96 40.413866-40.96 40.413867 31.675734 31.197867L641.706667 276.48 569.002667 204.8l-31.675734 31.197867zM462.848 204.8L378.88 347.886933l38.775467 22.050134 83.968-143.086934L462.711467 204.8h0.068266zM437.4528 485.853867h388.846933v68.608H437.4528V485.853867z m0 189.576533h388.846933V744.106667H437.4528V675.4304z m-210.261333-63.6928L164.522667 532.206933l53.794133-42.461866 20.343467 25.8048 99.669333-78.2336 42.325333 53.930666L227.191467 611.669333z m0 198.724267l-62.6688-79.530667 53.794133-42.461867 20.343467 25.8048 99.669333-78.2336 42.325333 53.930667-153.463466 120.490667z" fill="#5B5B5B" p-id="5372"></path></symbol>'),this.addIcons('<symbol id="iconFileTypeSync" viewBox="0 0 1024 1024" ><path d="M878.4 83.1H327.9c-45 0-81.6 36.5-81.6 81.6v139.6c13-2.3 26.3-3.6 40-3.6 14.2 0 28.1 1.3 41.6 3.9v-99.2c0-22.5 18.3-40.8 40.8-40.8h469c22.5 0 40.8 18.3 40.8 40.8v613.2c0 22.5-18.3 40.8-40.8 40.8h-469c-22.5 0-40.8-18.2-40.8-40.8v-73.7c-13.5 2.5-27.4 3.9-41.6 3.9-13.6 0-27-1.2-40-3.6v114.1c0 45.1 36.5 81.6 81.6 81.6h550.6c45 0 81.6-36.5 81.6-81.6V164.7c-0.1-45.1-36.6-81.6-81.7-81.6zM197.5 611.9c0-5.1-19.7-50.5-19.7-97.3s18.6-95.2 19.7-98.6c4-12.5-11.9-20.3-18.3-14.9-5.2 4.3-99.7 91.1-108.5 98.4-12.8 8.4-3.4 24.9-3.4 24.9 6.3 5.4 105.6 94.3 113.1 100.3 5.6 4.4 17.1 4.6 17.1-12.8z" fill="#707070" p-id="12026"></path><path d="M353.2 611.9c0-5.1 19.7-50.5 19.7-97.3s-18.6-95.2-19.7-98.6c-4-12.5 11.9-20.3 18.3-14.9 5.2 4.3 99.7 91.1 108.5 98.4 12.8 8.4 3.4 24.9 3.4 24.9-6.3 5.4-105.6 94.3-113.1 100.3-5.6 4.4-17.1 4.6-17.1-12.8z" fill="#707070" p-id="12027"></path></symbol>'),this.addIcons('<symbol id="iconDateTime" viewBox="0 0 1024 1024"><path d="M157.37 394.68V869h711.49V216.8H750.27v29.65c0 8.65-2.78 15.75-8.34 21.31s-12.66 8.34-21.3 8.34c-8.65 0-15.75-2.78-21.31-8.34s-8.34-12.66-8.34-21.31V216.8H335.24v29.65c0 8.65-2.78 15.75-8.34 21.31s-12.66 8.34-21.31 8.34-15.75-2.78-21.31-8.34-8.34-12.66-8.34-21.31V216.8H157.37v118.58h711.49v59.29l-711.49 0.01z m177.87-237.16h355.74v-29.65c0-8.65 2.78-15.75 8.34-21.31s12.66-8.34 21.31-8.34 15.75 2.78 21.31 8.34 8.33 12.66 8.33 21.31v29.65H898.5c8.65 0 15.75 2.78 21.31 8.34s8.33 12.66 8.33 21.31v711.49c0 8.65-2.78 15.75-8.33 21.31-5.56 5.56-12.66 8.33-21.31 8.33H127.72c-8.65 0-15.75-2.78-21.31-8.33-5.56-5.56-8.34-12.66-8.34-21.31v-711.5c0-8.65 2.78-15.75 8.34-21.31s12.66-8.34 21.31-8.34h148.23v-29.65c0-8.65 2.78-15.75 8.34-21.31s12.66-8.34 21.31-8.34 15.75 2.78 21.31 8.34 8.34 12.66 8.34 21.31v29.66h-0.01z m-29.65 355.74h59.29c8.65 0 15.75 2.78 21.31 8.33 5.56 5.56 8.34 12.66 8.34 21.31s-2.78 15.75-8.34 21.31-12.66 8.33-21.31 8.33h-59.29c-8.65 0-15.75-2.78-21.31-8.33-5.56-5.56-8.34-12.66-8.34-21.31s2.78-15.75 8.34-21.31c5.56-5.55 12.67-8.33 21.31-8.33z m0 177.87h59.29c8.65 0 15.75 2.78 21.31 8.33 5.56 5.56 8.34 12.66 8.34 21.31s-2.78 15.75-8.34 21.31-12.66 8.33-21.31 8.33h-59.29c-8.65 0-15.75-2.78-21.31-8.33-5.56-5.56-8.34-12.66-8.34-21.31s2.78-15.75 8.34-21.31c5.56-5.55 12.67-8.33 21.31-8.33z m177.88-177.87h59.29c8.65 0 15.75 2.78 21.31 8.33 5.56 5.56 8.34 12.66 8.34 21.31s-2.78 15.75-8.34 21.31-12.66 8.33-21.31 8.33h-59.29c-8.65 0-15.75-2.78-21.31-8.33-5.56-5.56-8.34-12.66-8.34-21.31s2.78-15.75 8.34-21.31c5.56-5.55 12.66-8.33 21.31-8.33z m0 177.87h59.29c8.65 0 15.75 2.78 21.31 8.33 5.56 5.56 8.34 12.66 8.34 21.31s-2.78 15.75-8.34 21.31-12.66 8.33-21.31 8.33h-59.29c-8.65 0-15.75-2.78-21.31-8.33-5.56-5.56-8.34-12.66-8.34-21.31s2.78-15.75 8.34-21.31c5.56-5.55 12.66-8.33 21.31-8.33z m177.87-177.87h59.29c8.65 0 15.75 2.78 21.3 8.33 5.56 5.56 8.34 12.66 8.34 21.31s-2.78 15.75-8.34 21.31-12.66 8.33-21.3 8.33h-59.29c-8.65 0-15.75-2.78-21.31-8.33-5.56-5.56-8.34-12.66-8.34-21.31s2.78-15.75 8.34-21.31c5.56-5.55 12.66-8.33 21.31-8.33z m0 177.87h59.29c8.65 0 15.75 2.78 21.3 8.33 5.56 5.56 8.34 12.66 8.34 21.31s-2.78 15.75-8.34 21.31-12.66 8.33-21.3 8.33h-59.29c-8.65 0-15.75-2.78-21.31-8.33-5.56-5.56-8.34-12.66-8.34-21.31s2.78-15.75 8.34-21.31c5.56-5.55 12.66-8.33 21.31-8.33z" p-id="4307"></path></symbol>'),this.addIcons('<symbol id="iconDownload" viewBox="0 0 1024 1024"><path d="M967.111111 967.111111H56.888889v-284.444444h113.777778v170.666666h682.666666v-170.666666h113.777778z" fill="#515151" p-id="6125"></path><path d="M512 779.377778l-278.755556-284.444445 79.644445-79.644444L512 614.4l199.111111-199.111111 79.644445 79.644444z" fill="#515151" p-id="6126"></path><path d="M568.888889 625.777778H455.111111V56.888889h113.777778z" fill="#515151" p-id="6127"></path></symbol>'),this.addIcons('<symbol id="iconFileTree" viewBox="0 0 1024 1024"><path d="M950.4 128.2H330.1c-5.5 0-10 4.5-10 10v172c0 5.5 4.5 10 10 10h620.3c5.5 0 10-4.5 10-10v-172c0-5.5-4.5-10-10-10z m-62 120H392.1v-48h496.3v48z m62 456H491.8c-5.5 0-10 4.5-10 10v172c0 5.5 4.5 10 10 10h458.6c5.5 0 10-4.5 10-10v-172c0-5.5-4.5-10-10-10z m-62 120H553.8v-48h334.6v48z m-396.6-216h457.1c5.5 0 10-4.5 10-10v-172c0-5.5-4.5-10-10-10H491.8c-5.5 0-10 4.5-10 10v172c0 5.5 4.5 10 10 10z m62-120h333.1v48H553.8v-48z m-169.7 60c19.9 0 36-16.1 36-36s-16.1-36-36-36h-188v-163c35.2-14.2 60-48.7 60-89 0-53-43-96-96-96s-96 43-96 96c0 40.3 24.8 74.8 60 89v487c0 19.9 16.1 36 36 36h224c19.9 0 36-16.1 36-36s-16.1-36-36-36h-188v-216h188z" p-id="10714"></path></symbol>'),this.addIcons('<symbol id="iconAssets" viewBox="0 0 1024 1024"><path d="M759.808 904.874667H178.176c-26.624 0-48.469333-21.504-48.469333-48.469334V323.242667c0-26.624 21.845333-48.469333 48.469333-48.469334h581.632c26.965333 0 48.469333 21.845333 48.469333 48.469334v533.162666c0 26.965333-21.504 48.469333-48.469333 48.469334zM298.666667 371.370667c-39.594667 0-72.704 32.426667-72.704 72.704 0 39.936 33.109333 72.021333 72.704 72.021333 40.277333 0 72.704-32.426667 72.704-72.021333 0-40.618667-32.426667-72.704-72.704-72.704z m460.8 375.466666l-188.757334-230.058666-128.341333 156.330666 45.397333 55.296c6.144 7.850667 6.144 20.138667 0 27.306667-6.485333 7.509333-16.384 7.509333-22.528 0l-56.32-68.608h-0.341333v-0.341333L314.026667 571.050667l-136.533334 166.570666v70.997334h581.632l0.341334-61.781334z m0 0" fill="#2C2C2C" p-id="12586"></path><path d="M873.813333 843.093333h-68.266666v-61.44h58.026666V204.8H320.853333v68.266667H259.413333V194.56c0-28.330667 22.869333-51.2 51.2-51.2h563.2c28.330667 0 51.2 22.869333 51.2 51.2v597.333333c0 28.330667-22.869333 51.2-51.2 51.2z" fill="#2C2C2C" p-id="12587"></path></symbol>')}async preprocessData(){}async initPluginConfigData(){let t=await Fs(this);await Gr(this,t);let s=await Ti(this);await hr(this,s),this.settingUtils=await this.openSettingPanel(t),await this.createIcons(),this.hasNewVersion=await this.checkUpdatePlugin()}async initPluginLayoutData(){let t=await Fs(this),s=await Ti(this);if(this.settingUtils||(this.settingUtils=await this.openSettingPanel(t)),t==jr?this.gitUtil=Ri(this.settingUtils,this.i18n,s):t==$r&&(this.gitUtil=null),this.gitUtil){let i=this.settingUtils.get(Ne);i==er?this.startAutoSync(()=>this.syncDataToCloud()):i==Un&&this.syncDataToCloud()}else throw new ls(Us.REQUIRED_FIELD,this.settingUtils.file,this.i18n.warnFinishSettingConfig)}async checkUpdatePlugin(){let t=q.getFrontend();return(await ll(t)).plugins.filter(o=>o.name==this.name).length>0}async startAutoSync(t,s,i="every",...o){if(__gSyncFlow&&__gSyncFlow.isPausedConflict())return;let __cb=t;if(__gSyncFlow&&__cb){const __raw=__cb;__cb=function(){__gSyncFlow.markAutoTick(),__raw.apply(this,arguments)}}this.timerTask&&this.timerTask.removeSelf(),s||(s=this.settingUtils.get(je)),s=s*1e3,i=="every"?this.timerTask=new Vi(__cb,s,o):i=="once"&&(this.timerTask=new Wi(__cb,s,o)),this.timerTask.start()}async __gSyncDataToCloudBase(t=void 0,s=!1){let i,o;if(this.isGitSyncing)throw console.log(Ge,"---",Ge.FAILED),new Ht(Ge.FAILED,this.i18n.isSyncingInfo);this.isGitSyncing=!0;let n=!1;try{if(!this.settingUtils.get(Me))throw console.log(Ge,"---",Ge.FAILED),new Ht(Ge.FAILED,this.i18n.enableSyncTips);if(i=this.topBarElement.querySelector("svg"),o=this.topBarElement.querySelector("svg use"),this.topBarElement&&this.topBarElement.classList.toggle("toolbar__item--active"),o&&o.setAttribute("xlink:href","#iconRefresh"),i.classList.toggle("fn__rotate"),this.gitUtil)if(t||(t=this.settingUtils.get(lt)),t==Dn)await this.gitUtil.handleAutoRemoteAndLocalFileSync();else if(t==Gn){n=!0;let u=new q.Dialog({title:"选择同步方向",content:'<div id="syncStrategy" class="b3-dialog__content"></div>',hideCloseIcon:!1,destroyCallback:p=>{p||(this.isGitSyncing=!1),S.info("destroyCallback",p),h.$destroy()},resizeCallback:p=>{S.info("resizeCallback",p)}}),h=new ru({target:u.element.querySelector("#syncStrategy"),props:{cancelCallback:()=>{S.info("cancel"),this.isGitSyncing=!1,u.destroy({operate:An})},confirmCallback:async(p,d)=>{S.info("confirm",p,d),this.isGitSyncing=!1,u.destroy({operate:An}),p==0?this.syncDataToCloud(di,d):p==1?this.syncDataToCloud(Jr,d):q.showMessage(this.i18n.selectUpload,ve,"info")}}})}else t==di?await this.gitUtil.handleRemoteCoverLocal(s):t==Jr&&await this.gitUtil.handleLocalCoverRemote(s);else throw new ls(Us.REQUIRED_FIELD,this.settingUtils.file,this.i18n.isSyncingInfo);this.topBarElement&&this.topBarElement.classList.toggle("toolbar__item--active"),o&&o.setAttribute("xlink:href","#iconGmailSync"),i.classList.toggle("fn__rotate")}catch(a){throw S.error("syncDataToCloud:",a,"stack:",a.stack),this.isGitSyncing=!1,this.topBarElement&&this.topBarElement.classList.toggle("toolbar__item--active"),o&&o.setAttribute("xlink:href","#iconGmailSync"),i&&i.classList.toggle("fn__rotate"),a}n||(this.isGitSyncing=!1)}
-async syncDataToCloud(t=void 0,s=!1){return (__gSyncFlow||(__gEnsureSyncFlow(this),__gSyncFlow)).runSync(t,s)}async registerPluginButton(){const t=q.getFrontend();this.isMobile=t==="mobile"||t==="browser-mobile",this.topBarElement=this.addTopBar({icon:"iconGmailSync",title:this.i18n.addTopBarIcon,position:"right",callback:()=>{if(this.isMobile)this.openMenuPanel();else{let s=this.topBarElement.getBoundingClientRect();s.width===0&&(s=document.querySelector("#barMore").getBoundingClientRect()),s.width===0&&(s=document.querySelector("#barPlugins").getBoundingClientRect()),this.openMenuPanel(s)}}})}async openMenuPanel(t){const s=new q.Menu("leftTopBar",()=>{S.info(this.i18n.byeMenu)});let i="iconSelect";s.addItem({icon:"iconStartSync",label:this.i18n.startSync,click:async()=>{this.syncDataToCloud()}}),s.addItem({icon:"iconRefresh",label:this.i18n.refreshOrRecover,type:"submenu",submenu:[{index:0,icon:"iconFileTree",label:this.i18n.refreshWSTree,click:async()=>{xn()},bind:y=>{y.title=this.i18n.refreshWSTreeTips}},{index:1,icon:"iconAssets",label:this.i18n.recoverAssets,click:async()=>{if(this.isGitSyncing)throw console.log(Ge,"---",Ge.FAILED),new Ht(Ge.FAILED,this.i18n.isSyncingInfo);this.isGitSyncing=!0;try{q.showMessage(this.i18n.updateLocalAssetsPathInfo,ve,"info"),await $s({}),q.showMessage(this.i18n.updateLocalAssetsPathSucc,wt,"info")}catch{q.showMessage(this.i18n.updateLocalAssetsPathFailed,wt,"info")}finally{this.isGitSyncing=!1}},bind:y=>{y.title=this.i18n.recoverAssetsTips}}]});let o=this.settingUtils.get(Pe)??0,n=["","",""];n[o]=i,s.addItem({id:Pe,icon:"iconRangeSync",label:this.i18n.syncRange,type:"submenu",submenu:[{index:0,icon:n[0],label:this.i18n.workSpace,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}let w=this.settingUtils.get(Pe);q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyworkspace_commit,()=>{this.settingUtils.setAndSave(Pe,Do)},()=>{this.settingUtils.set(Pe,w)})}},{index:1,icon:n[1],label:this.i18n.dataFile,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}let w=this.settingUtils.get(Pe);q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyworkspace_commit,()=>{this.settingUtils.setAndSave(Pe,Go)},()=>{this.settingUtils.set(Pe,w)})}},{index:2,icon:n[2],label:this.i18n.noteFile,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}let w=this.settingUtils.get(Pe);q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyworkspace_commit,()=>{this.settingUtils.setAndSave(Pe,Li)},()=>{this.settingUtils.set(Pe,w)})}}]});let a=this.settingUtils.get(lt)??0,u=["","","",""];u[a]=i,s.addItem({id:lt,icon:"iconStrategySync",label:this.i18n.syncStrategy,type:"submenu",submenu:[{index:0,icon:u[0],label:this.i18n.autoSyncStrategy,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(lt,Dn)}},{index:1,icon:u[1],label:this.i18n.manualSyncStrategy,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(lt,Gn)}},{index:2,icon:u[2],label:this.i18n.keepRemoteCover,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(lt,di)}},{index:3,icon:u[3],label:this.i18n.keepLocalCover,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(lt,Jr)}}]});let h=this.settingUtils.get(ut)??0,p=["",""];p[h]=i,s.addItem({id:ut,icon:"iconFileTypeSync",label:this.i18n.noteType,type:"submenu",submenu:[{index:0,icon:p[0],label:this.i18n.siyuanFile,click:()=>{if(this.isGitSyncing){q.showMessage(this.i18n.isSyncingInfo,ve,"info");return}if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(ut,Va),q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_switch_noteFormat_sync,()=>{this.syncDataToCloud(Jr)})}},{index:1,icon:p[1],label:this.i18n.markdownFile,click:()=>{if(this.isGitSyncing){q.showMessage(this.i18n.isSyncingInfo,ve,"info");return}if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(ut,Ya),q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_switch_noteFormat_sync,()=>{this.syncDataToCloud(Jr)})}}]});let d=this.settingUtils.get(Ne)??0,f=["","",""];f[d]=i,s.addItem({id:Ne,icon:"iconModeSync",label:this.i18n.syncMode,type:"submenu",submenu:[{index:0,icon:f[0],label:this.i18n.autoSync,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.gitUtil?(this.settingUtils.setAndSave(Ne,er),this.startAutoSync(()=>this.syncDataToCloud()),this.settingUtils.enable(je)):q.showMessage(this.i18n.warnFinishSettingConfig,ve,"info")}},{index:1,icon:f[1],label:this.i18n.manualSync,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(Ne,Un),this.timerTask&&this.timerTask.removeSelf(),this.settingUtils.disable(je)}},{index:2,icon:f[2],label:this.i18n.fullManualSync,click:()=>{if(!this.settingUtils.get(Me)){q.showMessage(this.i18n.enableSyncTips,ve,"info");return}this.settingUtils.setAndSave(Ne,Ka),this.timerTask&&this.timerTask.removeSelf(),this.settingUtils.disable(je)}}]}),s.addItem({icon:"iconInfo",label:this.i18n.gSyncRuntimeLogsTitle||"SGSP 运行日志",click:()=>{const host=__gSyncFlow||__gEnsureSyncFlow(this);host.showRuntimeLogs()}}),s.addItem({icon:"iconHistory",label:this.i18n.syncHistory,click:()=>{this.openSyncHistoryPanel()}}),s.addItem({icon:"iconSettings",label:`${this.i18n.setting} ${this.hasNewVersion?'<button style="background-color: red; color: white; font-size: 10px; font-weight: bold; padding: 2px 5px; border-radius: 10px; border: none; cursor: pointer;">new</button>':""}`,click:()=>{this.openSetting()}}),this.isMobile?s.fullscreen():s.open({x:t.right,y:t.bottom,isLeft:!0})}async openSettingPanel(t){let s=await Ti(this);if(t==jr){if(s==Qi)return await this.getGitPlatformSetting(es);if(s==Ji)return await this.getGitPlatformSetting(zr)}else if(t==$r){if(s==Ao)return await this.getCloudPlatformSetting(ts);if(s==Oo)return await this.getCloudPlatformSetting(rs)}else return Gr(this,Qe),q.showMessage(this.i18n.error.setting.reconfig_platform,ve,"info"),await this.getGitPlatformSetting(zr)}async getGitPlatformSetting(t){let s=new ro({plugin:this,name:t,callback:async()=>{var n;let i=((n=this.settingUtils)==null?void 0:n.take(jt))??await Fs(this),o=Number.parseInt(this.settingUtils.take(Xt));if(await hr(this,o),await Gr(this,i),i==jr?this.gitUtil=Ri(this.settingUtils,this.i18n,o):i==$r?this.gitUtil=null:this.gitUtil=null,this.gitUtil){if(this.settingUtils.take(Ne)==er){let u=this.settingUtils.take(je);this.startAutoSync(()=>this.syncDataToCloud(),u)}}else q.showMessage(this.i18n.warnFinishSettingConfig,ve,"info")}});return s.addItem({key:"disclaimeHint",value:"",type:"hint",direction:"row",title:this.i18n.disclaimeTitle,description:this.i18n.disclaimeDesc}),s.addItem({key:jt,value:0,type:"select",title:this.i18n.platformType,description:this.i18n.platformTypeDesc,options:{0:this.i18n.platform.git},action:{callback:async()=>{let i=this.settingUtils.take(jt);if(i!=jr){const o=document.querySelectorAll(".b3-button.b3-button--cancel");o.length>0?(o[o.length-1].click(),S.info("已触发最后一个取消按钮的点击事件")):S.warn("未找到任何取消按钮"),await Gr(this,i),await hr(this,Qe),this.settingUtils=await this.openSettingPanel(i),this.openSetting()}}}}),s.addItem({key:Xt,value:0,type:"select",title:this.i18n.subGitPlatformType,description:this.i18n.subGitplatformTypeDesc,options:{0:this.i18n.platform.subPlatform.git.githubAPI,1:this.i18n.platform.subPlatform.git.giteeAPI},action:{callback:async()=>{let i=this.settingUtils.take(jt),o=this.settingUtils.take(Xt);await Kn(this,this.settingUtils,i,o),await hr(this,o)}}}),s.addItem({key:So,value:"",type:"textinput",title:this.i18n.gitRepoAddress,placeholder:this.i18n.gitRepoAddressPlaceHolder,description:this.i18n.gitRepoAddressDesc,action:{callback:()=>{let i=this.settingUtils.take(De),o=this.settingUtils.take(rt);(i||o)&&q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyrepo_reset_commit,()=>{this.settingUtils.set(De,null),this.settingUtils.set(rt,null)})}}}),s.addItem({key:Ls,value:"",type:"textinput",title:this.i18n.gitRepoBranch,placeholder:this.i18n.gitRepoBranchPlaceHolder,description:this.i18n.gitRepoBranchDesc,action:{callback:()=>{let i=this.settingUtils.take(De),o=this.settingUtils.take(rt);(i||o)&&q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyrepo_reset_commit,()=>{this.settingUtils.set(De,null),this.settingUtils.set(rt,null)})}}}),s.addItem({key:Bs,value:"",type:"textinput",title:this.i18n.gitTokenORkey,description:this.i18n.gitTokenORkeyDesc}),s.addItem({key:Pn,value:"",type:"textinput",title:this.i18n.gitUserEmail,placeholder:this.i18n.gitUserEmailPlaceHolder,description:this.i18n.gitUserEmailDesc}),s.addItem({key:Ii,value:"",type:"textarea",title:this.i18n.ignoreFile,placeholder:this.i18n.ignoreFilePlaceHolder,description:this.i18n.ignoreFileDesc}),s.addItem({key:Dt,value:"",type:"textarea",title:this.i18n.assetPrefix,placeholder:this.i18n.assetPrefixPlaceHolder,description:this.i18n.assetPrefixDesc,action:{callback:()=>{let i=this.settingUtils.take(Dt)??"";i=i.trim().replace(/[/\\]+$/,""),i.length>0&&!i.endsWith("assets")&&q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_assetsPrefix_illegal,()=>{this.settingUtils.set(Dt,i+"/assets/")},()=>{this.settingUtils.set(Dt,"")})}}}),s.addItem({key:Me,value:!1,type:"checkbox",title:this.i18n.enableSync,description:this.i18n.enableSyncDesc,action:{callback:()=>{let i=this.settingUtils.take(Me);i?(this.settingUtils.enable(mt),this.settingUtils.enable(Pe),this.settingUtils.enable(Ne),this.settingUtils.enable(ut),this.settingUtils.enable(lt),this.settingUtils.take(Ne)==er?this.settingUtils.enable(je):this.settingUtils.disable(je)):(this.settingUtils.disable(mt),this.settingUtils.disable(Pe),this.settingUtils.disable(Ne),this.settingUtils.disable(je),this.settingUtils.disable(ut),this.settingUtils.disable(lt)),this.settingUtils.setAndSave(Me,i)}}}),s.addItem({key:mt,value:!0,type:"checkbox",title:this.i18n.syncGenConflictFile,description:this.i18n.syncGenConflictFileDesc}),s.addItem({key:Pe,value:0,type:"select",title:this.i18n.syncRange,description:this.i18n.syncRangeDesc,options:{0:this.i18n.workSpace,1:this.i18n.dataFile,2:this.i18n.noteFile},action:{callback:()=>{let i=this.settingUtils.get(Pe);q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyworkspace_commit,void 0,()=>{this.settingUtils.set(Pe,i)})}}}),s.addItem({key:lt,value:0,type:"select",title:this.i18n.syncStrategy,description:this.i18n.syncStrategyDesc,options:{0:this.i18n.autoSyncStrategy,1:this.i18n.manualSyncStrategy,2:this.i18n.keepRemoteCover,3:this.i18n.keepLocalCover}}),s.addItem({key:ut,value:0,type:"select",title:this.i18n.noteType,description:this.i18n.noteTypeDesc,options:{0:this.i18n.siyuanFile,1:this.i18n.markdownFile}}),s.addItem({key:Ne,value:2,type:"select",title:this.i18n.syncMode,description:this.i18n.syncModeDesc,options:{0:this.i18n.autoSync,1:this.i18n.manualSync,2:this.i18n.fullManualSync},action:{callback:()=>{this.settingUtils.take(Ne)==er?this.settingUtils.enable(je):this.settingUtils.disable(je)}}}),s.addItem({key:je,value:300,type:"number",title:this.i18n.syncInterval,description:this.i18n.syncIntervalDesc}),s.addItem({key:De,value:"",type:"textinput",title:this.i18n.latestCommitSha,placeholder:"",description:this.i18n.latestCommitShaDesc}),s.addItem({key:rt,value:"",type:"textinput",title:this.i18n.latestCommitTime,placeholder:"",description:this.i18n.latestCommitTimeDesc}),s.addItem({key:"sgsp_sync_notify",value:!0,type:"checkbox",title:this.i18n.sgspSyncNotifyTitle,description:this.i18n.sgspSyncNotifyDesc}),s.addItem({key:"sgsp_auto_retry",value:!1,type:"checkbox",title:this.i18n.sgspAutoRetryTitle,description:this.i18n.sgspAutoRetryDesc}),s.addItem({key:"aboutHint",value:"",type:"hint",direction:"row",title:this.i18n.hintTitle,description:this.i18n.hintDesc}),await ji(s),s}async getCloudPlatformSetting(t){let s=new ro({plugin:this,name:t,callback:async()=>{var n;let i=((n=this.settingUtils)==null?void 0:n.take(jt))??await Fs(this),o=Number.parseInt(this.settingUtils.take(Xt));if(await hr(this,o),await Gr(this,i),i==jr?this.gitUtil=Ri(this.settingUtils,this.i18n,o):i==$r?this.gitUtil=null:this.gitUtil=null,this.gitUtil){if(this.settingUtils.take(Ne)==er){let u=this.settingUtils.take(je);this.startAutoSync(()=>this.syncDataToCloud(),u)}}else q.showMessage(this.i18n.warnFinishSettingConfig,ve,"info")}});return s.addItem({key:"disclaimeHint",value:"",type:"hint",direction:"row",title:this.i18n.disclaimeTitle,description:this.i18n.disclaimeDesc}),s.addItem({key:jt,value:1,type:"select",title:this.i18n.platformType,description:this.i18n.platformTypeDesc,options:{0:this.i18n.platform.git},action:{callback:async()=>{let i=this.settingUtils.take(jt);if(i!=$r){const o=document.querySelectorAll(".b3-button.b3-button--cancel");o.length>0?(o[o.length-1].click(),S.info("已触发最后一个取消按钮的点击事件")):S.warn("未找到任何取消按钮"),await Gr(this,i),await hr(this,Qe),this.settingUtils=await this.openSettingPanel(i),this.openSetting()}}}}),s.addItem({key:Xt,value:1,type:"select",title:this.i18n.subCloudPlatformType,description:this.i18n.subCloudplatformTypeDesc,options:{0:this.i18n.platform.subPlatform.cloud.baidu,1:this.i18n.platform.subPlatform.cloud.ali},action:{callback:async()=>{let i=this.settingUtils.take(jt),o=this.settingUtils.take(Xt);await Kn(this,this.settingUtils,i,o),await hr(this,o)}}}),s.addItem({key:Oa,value:"",type:"textinput",title:this.i18n.cloudAddress,placeholder:this.i18n.cloudAddressPlaceHolder,description:this.i18n.cloudAddressDesc,action:{callback:()=>{let i=this.settingUtils.take(De),o=this.settingUtils.take(rt);(i||o)&&q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyrepo_reset_commit,()=>{this.settingUtils.set(De,null),this.settingUtils.set(rt,null)})}}}),s.addItem({key:Ra,value:"",type:"textinput",title:this.i18n.cloudUserName,placeholder:this.i18n.cloudUserNamePlaceHolder,description:this.i18n.cloudUserNameDesc,action:{callback:()=>{let i=this.settingUtils.take(De),o=this.settingUtils.take(rt);(i||o)&&q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyrepo_reset_commit,()=>{this.settingUtils.set(De,null),this.settingUtils.set(rt,null)})}}}),s.addItem({key:Bs,value:"",type:"textinput",title:this.i18n.cloudTokenKey,description:this.i18n.cloudTokenKeyDesc}),s.addItem({key:Pn,value:"",type:"textinput",title:this.i18n.gitUserEmail,placeholder:this.i18n.gitUserEmailPlaceHolder,description:this.i18n.gitUserEmailDesc}),s.addItem({key:Ii,value:"",type:"textarea",title:this.i18n.ignoreFile,placeholder:this.i18n.ignoreFilePlaceHolder,description:this.i18n.ignoreFileDesc}),s.addItem({key:Dt,value:"",type:"textarea",title:this.i18n.assetPrefix,placeholder:this.i18n.assetPrefixPlaceHolder,description:this.i18n.assetPrefixDesc,action:{callback:()=>{let i=this.settingUtils.take(Dt)??"";i=i.trim().replace(/[/\\]+$/,""),i.length>0&&!i.endsWith("assets")&&q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_assetsPrefix_illegal,()=>{this.settingUtils.set(Dt,i+"/assets/")},()=>{this.settingUtils.set(Dt,"")})}}}),s.addItem({key:Me,value:!1,type:"checkbox",title:this.i18n.enableSync,description:this.i18n.enableSyncDesc,action:{callback:()=>{let i=this.settingUtils.take(Me);i?(this.settingUtils.enable(mt),this.settingUtils.enable(Pe),this.settingUtils.enable(Ne),this.settingUtils.enable(ut),this.settingUtils.enable(lt),this.settingUtils.take(Ne)==er?this.settingUtils.enable(je):this.settingUtils.disable(je)):(this.settingUtils.disable(mt),this.settingUtils.disable(Pe),this.settingUtils.disable(Ne),this.settingUtils.disable(je),this.settingUtils.disable(ut),this.settingUtils.disable(lt)),this.settingUtils.setAndSave(Me,i)}}}),s.addItem({key:mt,value:!0,type:"checkbox",title:this.i18n.syncGenConflictFile,description:this.i18n.syncGenConflictFileDesc}),s.addItem({key:Pe,value:0,type:"select",title:this.i18n.syncRange,description:this.i18n.syncRangeDesc,options:{0:this.i18n.workSpace,1:this.i18n.dataFile,2:this.i18n.noteFile},action:{callback:()=>{let i=this.settingUtils.get(Pe);q.confirm(this.i18n.confirm_title_info,this.i18n.confirm_modifyworkspace_commit,void 0,()=>{this.settingUtils.set(Pe,i)})}}}),s.addItem({key:lt,value:0,type:"select",title:this.i18n.syncStrategy,description:this.i18n.syncStrategyDesc,options:{0:this.i18n.autoSyncStrategy,1:this.i18n.manualSyncStrategy,2:this.i18n.keepRemoteCover,3:this.i18n.keepLocalCover}}),s.addItem({key:ut,value:0,type:"select",title:this.i18n.noteType,description:this.i18n.noteTypeDesc,options:{0:this.i18n.siyuanFile,1:this.i18n.markdownFile}}),s.addItem({key:Ne,value:2,type:"select",title:this.i18n.syncMode,description:this.i18n.syncModeDesc,options:{0:this.i18n.autoSync,1:this.i18n.manualSync,2:this.i18n.fullManualSync},action:{callback:()=>{this.settingUtils.take(Ne)==er?this.settingUtils.enable(je):this.settingUtils.disable(je)}}}),s.addItem({key:je,value:300,type:"number",title:this.i18n.syncInterval,description:this.i18n.syncIntervalDesc}),s.addItem({key:De,value:"",type:"textinput",title:this.i18n.latestCommitSha,placeholder:"",description:this.i18n.latestCommitShaDesc}),s.addItem({key:rt,value:"",type:"textinput",title:this.i18n.latestCommitTime,placeholder:"",description:this.i18n.latestCommitTimeDesc}),s.addItem({key:"sgsp_sync_notify",value:!0,type:"checkbox",title:this.i18n.sgspSyncNotifyTitle,description:this.i18n.sgspSyncNotifyDesc}),s.addItem({key:"sgsp_auto_retry",value:!1,type:"checkbox",title:this.i18n.sgspAutoRetryTitle,description:this.i18n.sgspAutoRetryDesc}),s.addItem({key:"aboutHint",value:"",type:"hint",direction:"row",title:this.i18n.hintTitle,description:this.i18n.hintDesc}),await ji(s),s}async openSyncHistoryPanel(){try{if(!this.gitUtil)throw new ls(Us.READ_FAILED,this.settingUtils.file,this.i18n.warnFinishSettingConfig);let t=new q.Dialog({positionId:"mainSyncHistory",content:'<div id="syncHistory" class="fn__flex-column" style="height: 100%;"></div>',width:"90vw",height:"80vh",hideCloseIcon:!1,destroyCallback:i=>{S.info("destroyCallback",i),s.$destroy()},resizeCallback:i=>{S.info("resizeCallback",i)}});if(!t.element||!t.element.querySelector||!t.element.querySelector("#syncHistory")){const host=__gSyncFlow||__gEnsureSyncFlow(this);host.addLog("error","同步历史面板挂载节点不存在");host.notify(host.i18n("gSyncHistoryError","❌ 同步历史面板暂时无法打开,请稍后重试"),"error");return}let s=new Qc({target:t.element.querySelector("#syncHistory"),props:{gitRemoteAPI:this.gitUtil,branchName:this.settingUtils.get(Ls),localCommitTime:this.settingUtils.get(rt),localCommitSha:this.settingUtils.get(De),i18n:this.i18n}})}catch(err){const host=__gSyncFlow||__gEnsureSyncFlow(this);host.addLog("error","同步历史面板打开失败: "+(err&&err.message?err.message:err));host.notify(host.i18n("gSyncHistoryError","❌ 同步历史面板暂时无法打开,请稍后重试"),"error");}}async openPayMentPlanPanel(){let t=new q.Dialog({title:this.i18n.feePlan,content:'<div id="paymentPlan" class=""></div>',width:"800px",destroyCallback:i=>{S.info("destroyCallback",i),s.$destroy()}}),s=new Zc({target:t.element.querySelector("#paymentPlan")})}};Yt([jp(Xr,"settingUtils")],exports.default.prototype,"settingUtils",2);Yt([we()],exports.default.prototype,"onload",1);Yt([we({rethrow:!1})],exports.default.prototype,"initPluginLayoutData",1);Yt([we({rethrow:!1})],exports.default.prototype,"syncDataToCloud",1);Yt([we()],exports.default.prototype,"openMenuPanel",1);Yt([we()],exports.default.prototype,"openSettingPanel",1);Yt([we()],exports.default.prototype,"getGitPlatformSetting",1);Yt([we()],exports.default.prototype,"getCloudPlatformSetting",1);Yt([we()],exports.default.prototype,"openSyncHistoryPanel",1);exports.default=Yt([$p()],exports.default);module.exports=exports.default;
+// src/plugin/index.js
+var ICONS_MAIN = '<symbol id="iconGmailSync" viewBox="0 0 1024 1024"><path d="M998.4 627.2c-51.2 230.4-256 396.8-499.2 396.8-224 0-409.6-140.8-480-339.2h121.6c64 134.4 198.4 230.4 358.4 230.4 179.2 0 332.8-121.6 384-281.6l115.2-6.4zM499.2 0c224 0 409.6 140.8 480 339.2h-121.6c-64-134.4-198.4-230.4-358.4-230.4-179.2 0-332.8 121.6-384 281.6L0 396.8C51.2 172.8 256 0 499.2 0z" fill="#646A73"></path><path d="M998.4 332.8c0 32-25.6 57.6-57.6 64h-140.8c-19.2 0-32-12.8-32-32v-51.2c0-19.2 12.8-32 32-32h83.2V32c0-12.8 12.8-25.6 25.6-32h57.6c19.2 0 32 12.8 32 32v300.8zM0 659.2c0-32 25.6-57.6 57.6-64h140.8c19.2 0 32 12.8 32 32v51.2c0 19.2-12.8 32-32 32H115.2V960c0 12.8-12.8 25.6-25.6 32H32c-19.2 0-32-12.8-32-32v-300.8z" fill="#646A73"></path><path d="M665.6 569.6H512V473.6h249.6c12.8 0 12.8 0 12.8 6.4 6.4 70.4 0 134.4-38.4 192-38.4 57.6-96 96-160 108.8-83.2 19.2-166.4 0-236.8-51.2-57.6-44.8-89.6-102.4-96-172.8-19.2-147.2 64-275.2 204.8-313.6 89.6-19.2 172.8 0 243.2 57.6l6.4 6.4L620.8 384l-6.4-6.4c-25.6-25.6-64-38.4-108.8-38.4-83.2 0-153.6 64-160 147.2-12.8 89.6 44.8 172.8 134.4 192 51.2 12.8 96 6.4 140.8-25.6 19.2-19.2 38.4-44.8 44.8-76.8v-6.4z" fill="#646A73"></path></symbol>';
+var ICONS_SYNC = '<symbol id="iconModeSync" viewBox="0 0 1024 1024"><path d="M512 128c-212.064 0-384 171.936-384 384h-64l106.624 149.312L277.312 512H213.344c0-164.928 133.728-298.656 298.656-298.656 61.6 0 118.848 18.624 166.4 50.56l46.912-51.904A380.544 380.544 0 0 0 512 128z m331.328 234.688L746.688 512h64c0 164.928-133.728 298.656-298.656 298.656a297.216 297.216 0 0 1-166.4-50.56l-46.912 51.904A380.544 380.544 0 0 0 512 896c212.064 0 384-171.936 384-384h64l-106.624-149.312z" fill="currentColor"></path></symbol>';
+var SyGspPlugin = class extends q.Plugin {
+  constructor(...args) {
+    super(...args);
+    this.isMobile = String(q.getFrontend ? q.getFrontend() : "desktop").indexOf("mobile") >= 0;
+    this.timerTask = null;
+    this.topBarElement = null;
+    this.logs = new RuntimeLogs(200);
+    this.events = createEventBus();
+  }
+  async onload() {
+    try {
+      this.kernel = createKernel(q);
+      await this._initStores();
+      this.notification = new NotificationService({ q, i18n: this.i18n });
+      this.settingsBuilder = new SettingsPanelBuilder({
+        plugin: this,
+        q,
+        i18n: this.i18n,
+        metadataStore: this.metadataStore,
+        onPlatformChanged: async () => {
+          this.logs.info("平台已切换: " + this._platform());
+        }
+      });
+      this.settingUtils = await this.settingsBuilder.build();
+      await this._migrateFromLegacyIfNeeded();
+      this.conflictDialog = new ConflictDialog({
+        q,
+        i18n: this.i18n,
+        conflictService: this.conflictService,
+        onDecide: (decisions) => this.controller.resolveConflicts(decisions),
+        notify: (msg, type) => this.notification.toast(msg, type)
+      });
+      this.conflictDialog.setKernel(this.kernel);
+      this.diagnosisPanel = new DiagnosisPanel({
+        q,
+        i18n: this.i18n,
+        runChecks: () => this._runDiagnosis(),
+        previewPlan: () => this._previewPlan(),
+        onChooseBase: (choice) => this.controller.resolveConflicts({ __base__: choice }),
+        onFirstWriteConfirmed: async () => {
+          await this._saveEngineState({ firstWriteConfirmed: true });
+          this.logs.info("首次写入已确认");
+          await this.syncNow({ trigger: "manual" });
+        },
+        notify: (msg, type) => this.notification.toast(msg, type)
+      });
+      this.controller = this._buildController();
+      await this.controller.restore();
+      this.createIcons();
+    } catch (err) {
+      this.logs.error("onload 失败: " + (err && err.stack || err));
+      console.error("[SY-GSP] onload 失败:", err);
+    }
+  }
+  async onLayoutReady() {
+    try {
+      this._registerTopBar();
+      this._bindEngineEvents();
+      await this._applyStartupBehavior();
+    } catch (err) {
+      this.logs.error("onLayoutReady 失败: " + (err && err.stack || err));
+      console.error("[SY-GSP] onLayoutReady 失败:", err);
+    }
+  }
+  async onunload() {
+    if (this.timerTask) {
+      clearInterval(this.timerTask);
+      this.timerTask = null;
+    }
+    if (this.controller) this.controller.destroy();
+  }
+  async uninstall() {
+    q.showMessage(this.i18n.byePlugin);
+  }
+  createIcons() {
+    this.addIcons(ICONS_MAIN);
+    this.addIcons(ICONS_SYNC);
+  }
+  // ---------- 装配 ----------
+  async _initStores() {
+    this.metadataStore = new SyncMetadataStore(this);
+    await this.metadataStore.load();
+    this.historyStore = new SyncHistoryStore(this);
+    await this.historyStore.load();
+    this.manifestStore = new LocalManifestStore(this);
+    await this.manifestStore.load();
+    this.conflictService = new ConflictService(this);
+    await this.conflictService.load();
+  }
+  /** 旧版 SGSP 设置迁移(仅首次;失败不影响使用,详见迁移报告) */
+  async _migrateFromLegacyIfNeeded() {
+    const marker = await this.loadData("migration-report.json");
+    if (marker) return;
+    const target = {
+      setAndSave: async (key, value) => {
+        if (PER_PLATFORM_KEYS.includes(key)) {
+          const file = PLATFORM_CONFIG_FILES[this._platform()] + ".json";
+          const data = await this.loadData(file) || {};
+          data[key] = value;
+          await this.saveData(file, data);
+          this.settingsBuilder.utils.set(key, value);
+        } else {
+          await this.settingsBuilder.utils.setAndSave(key, value);
+        }
+      }
+    };
+    const migration = new Migration(this.kernel, target, this.metadataStore);
+    const report = await migration.migrate(this._repoInfo()).catch((err) => ({
+      migratedKeys: [],
+      legacyHint: null,
+      errors: [String(err && err.message || err)]
+    }));
+    await this.saveData("migration-report.json", report);
+    if (report.migratedKeys.length > 0) {
+      this.logs.info("旧版设置迁移完成: " + report.migratedKeys.length + " 项");
+      const tpl = this.i18n.sygspMigrated || "已迁移旧版 SGSP 设置 {n} 项;同步基准需重新确认";
+      q.showMessage(tpl.replace("{n}", String(report.migratedKeys.length)), 6e3, "info");
+    }
+    if (report.errors && report.errors.length > 0) {
+      this.logs.error("旧版迁移错误: " + report.errors.join("; "));
+    }
+  }
+  _platform() {
+    return this.settingUtils && Number(this.settingUtils.take("upload_sub_platform")) === 1 ? "gitee" : "github";
+  }
+  _repoInfo() {
+    if (!this.settingUtils) {
+      return { provider: "github", owner: "", repo: "", branch: "", token: "" };
+    }
+    const addr = String(this.settingUtils.take("repository_address") || "");
+    const parsed = parseRepoAddress(addr);
+    return {
+      provider: this._platform(),
+      owner: parsed.owner,
+      repo: parsed.repo,
+      branch: String(this.settingUtils.take("repository_branch") || "").trim(),
+      token: String(this.settingUtils.take("submit_token") || "")
+    };
+  }
+  _repoKey(info) {
+    return info.provider + ":" + info.owner + "/" + info.repo + ":" + info.branch;
+  }
+  _buildController() {
+    const self = this;
+    return new SyncController({
+      plugin: this,
+      settings: this.settingUtils,
+      events: this.events,
+      notify: (msg, type) => this.notification.toast(msg, type),
+      i18n: (key, fallback) => this.i18n && this.i18n[key] || fallback,
+      repoInfo: () => this._repoInfo(),
+      autoSync: {
+        pause: () => this._stopAutoSyncTimer(),
+        resume: () => this._restartAutoSyncIfConfigured()
+      },
+      makeEngineDeps: (ctx) => self._makeEngineDeps(ctx)
+    });
+  }
+  _makeEngineDeps(ctx) {
+    const info = this._repoInfo();
+    const self = this;
+    const provider = info.provider === "gitee" ? new GiteeProvider({ owner: info.owner, repo: info.repo, branch: info.branch, token: info.token }) : new GitHubProvider({ owner: info.owner, repo: info.repo, branch: info.branch, token: info.token });
+    const workspace = new WorkspaceAdapter(this.kernel, {
+      getUserIgnore: () => this.settingUtils.take("ignore_file") || "",
+      getSyncRange: () => Number(this.settingUtils.take("sync_range")) || 0,
+      getNotebooks: async () => {
+        const res = await this.kernel.lsNotebooks();
+        return res && res.notebooks || [];
+      }
+    });
+    const contentAdapter = new ContentAdapter(this.kernel, { backupDir: "temp/SY-GSP/backup/", i18n: this.i18n });
+    const planner = new SyncPlanner({
+      readLocal: async (path) => {
+        const blob = await this.kernel.getFile(path);
+        return blob ? { bytes: new Uint8Array(await blob.arrayBuffer()) } : null;
+      },
+      readRemoteBlobBySha: async (sha) => provider.getBlob(sha),
+      guardLocalDelete: async (path) => workspace.guardLocalDelete(path, self.manifestStore, { remoteEntryExists: true })
+    });
+    return {
+      provider,
+      workspace,
+      contentAdapter,
+      metadataStore: this.metadataStore,
+      manifestStore: this.manifestStore,
+      conflictService: this.conflictService,
+      planner,
+      merger: new ThreeWayMerger(),
+      commitBuilder: new CommitBuilder({
+        requestLimit: Number(this.settingUtils.take("sygsp_blob_request_limit")) || 33554432
+      }),
+      events: this.events,
+      config: {
+        get repoKey() {
+          return self._repoKey(info);
+        },
+        get syncRange() {
+          return Number(self.settingUtils.take("sync_range")) || 0;
+        },
+        get syncFileType() {
+          return Number(self.settingUtils.take("sync_file_type")) === 1 ? "markdown" : "raw";
+        }
+      }
+    };
+  }
+  _saveEngineState(patch) {
+    const current = this._engineState || {};
+    this._engineState = Object.assign({}, current, patch);
+    return this.saveData(ENGINE_STATE_FILE, this._engineState).catch((err) => {
+      this.logs.error("状态保存失败: " + String(err && err.message || err));
+    });
+  }
+  // ---------- 引擎事件 → 日志/通知/历史/面板 ----------
+  _bindEngineEvents() {
+    this.events.on("state:changed", ({ state, conflictPaused }) => {
+      this.logs.info("状态: " + state + (conflictPaused ? " (冲突暂停: " + conflictPaused.kind + ")" : ""));
+      if (this.notification) {
+        if (this.controller && this.controller.isConflictPaused()) this.notification._badge("conflict");
+      }
+    });
+    this.events.on("sync:success", ({ ctx, result }) => {
+      this.logs.info(
+        "同步成功 " + result.operationId + " ↑" + result.uploads + " ↓" + result.downloads + " 删远" + result.deletionsRemote + " 删本" + result.deletionsLocal
+      );
+      this._recordHistory(ctx, "SUCCESS", null, result);
+      this.notification.syncSuccess(result, {
+        automatic: ctx.trigger === "automatic",
+        successNotify: this.settingUtils.get("sygsp_success_notify") !== false
+      });
+    });
+    this.events.on("sync:error", ({ ctx, error }) => {
+      this.logs.error("同步失败[" + error.category + "] " + error.toDisplayText());
+      this._recordHistory(ctx, "FAILED", error, null);
+      this.notification.syncError(error, { automatic: ctx.trigger === "automatic" });
+    });
+    this.events.on("sync:conflict", ({ ctx, conflictPaused }) => {
+      this.logs.error("同步暂停[" + conflictPaused.kind + "] " + conflictPaused.reason);
+      this._recordHistory(ctx, "CONFLICT_PAUSED", null, { paused: true, kind: conflictPaused.kind });
+      this.notification.conflictPaused({
+        kind: conflictPaused.kind,
+        conflictCount: conflictPaused.conflictCount,
+        reason: conflictPaused.reason
+      });
+      if (conflictPaused.kind === "FILE_CONFLICTS") {
+        const set = this.conflictService.openSet(this._repoKey(this._repoInfo()));
+        if (set) this.conflictDialog.show(set);
+      } else {
+        this.diagnosisPanel.show({ mode: "base_recovery" });
+      }
+    });
+    this.events.on("conflict:reopen", () => {
+      const set = this.conflictService.openSet(this._repoKey(this._repoInfo()));
+      if (set) this.conflictDialog.show(set);
+      else this.diagnosisPanel.show({ mode: "base_recovery" });
+    });
+  }
+  // ---------- 同步入口 ----------
+  async syncNow({ trigger = "manual", mode = "auto" } = {}) {
+    const info = this._repoInfo();
+    if (!info.owner || !info.repo || !info.branch || !info.token) {
+      this.notification.toast(this.i18n.warnFinishSettingConfig || "请先完整填写设置", "error");
+      this.openSetting();
+      return { skipped: true };
+    }
+    const state = this._engineState || await this.loadData(ENGINE_STATE_FILE) || {};
+    this._engineState = state;
+    if (!state.firstWriteConfirmed && mode === "auto" && trigger !== "conflict_resolution") {
+      this.diagnosisPanel.show({ mode: "first_sync" });
+      return { skipped: true, firstRun: true };
+    }
+    const strategy = Number(this.settingUtils.take("sync_strategy")) || 0;
+    if (mode === "auto" && strategy === 1) {
+      this._openDirectionDialog();
+      return { skipped: true, chooseDirection: true };
+    }
+    if (mode === "auto" && strategy === 2) mode = "remote_over_local";
+    if (mode === "auto" && strategy === 3) mode = "local_over_remote";
+    this.controller.retryPolicy.enabled = this.settingUtils.get("sygsp_auto_retry") === true;
+    this.notification.syncStarted(trigger);
+    return this.controller.syncNow({ trigger, mode });
+  }
+  /** 选择同步方向弹窗(策略 1) */
+  _openDirectionDialog() {
+    const t = this.i18n;
+    let direction = "0";
+    const dialog = new q.Dialog({
+      title: t.sygspChooseDirectionTitle || "选择同步方向",
+      content: '<div id="sygspDirection" style="padding:16px;"></div>',
+      width: "520px"
+    });
+    const root = dialog.element.querySelector("#sygspDirection");
+    const mkLabel = (value, text) => {
+      const label = document.createElement("label");
+      label.className = "fn__flex b3-label";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "upload";
+      input.value = value;
+      input.addEventListener("change", () => {
+        direction = value;
+      });
+      const textEl = document.createElement("div");
+      textEl.textContent = text;
+      label.appendChild(input);
+      label.appendChild(textEl);
+      return label;
+    };
+    root.appendChild(mkLabel("0", t.sygspDirRemote || "⬇️ 下载云端数据覆盖本地"));
+    root.appendChild(mkLabel("1", t.sygspDirLocal || "⬆️ 上传本地数据覆盖云端"));
+    const bar = document.createElement("div");
+    bar.className = "fn__flex";
+    bar.style.justifyContent = "flex-end";
+    bar.style.gap = "8px";
+    const cancel = document.createElement("button");
+    cancel.className = "b3-button b3-button--cancel";
+    cancel.textContent = t.cancel || "取消";
+    cancel.addEventListener("click", () => dialog.destroy());
+    const confirm = document.createElement("button");
+    confirm.className = "b3-button b3-button--text";
+    confirm.textContent = t.sygspConfirm || "确定";
+    confirm.addEventListener("click", () => {
+      dialog.destroy();
+      const mode = direction === "0" ? "remote_over_local" : "local_over_remote";
+      if (this._hasUnresolvedBase()) {
+        this.diagnosisPanel.show({ mode: "base_recovery" });
+        return;
+      }
+      this.controller.retryPolicy.enabled = this.settingUtils.get("sygsp_auto_retry") === true;
+      this.notification.syncStarted("manual");
+      this.controller.syncNow({ trigger: "manual", mode });
+    });
+    bar.appendChild(cancel);
+    bar.appendChild(confirm);
+    root.appendChild(bar);
+  }
+  _hasUnresolvedBase() {
+    return !this.metadataStore.getBaseCommit(this._repoKey(this._repoInfo()));
+  }
+  // ---------- 自动同步 ----------
+  _restartAutoSyncIfConfigured() {
+    this._stopAutoSyncTimer();
+    if (!this.settingUtils) return;
+    if (Number(this.settingUtils.take("sync_mode")) !== 0) return;
+    if (this.settingUtils.take("enabled_sync") === false) return;
+    this.startAutoSyncTimer(Number(this.settingUtils.take("sync_interval")) || 6e5);
+  }
+  _stopAutoSyncTimer() {
+    if (this.timerTask) {
+      clearInterval(this.timerTask);
+      this.timerTask = null;
+      this.logs.info("自动同步已暂停");
+    }
+  }
+  startAutoSyncTimer(intervalMs) {
+    this._stopAutoSyncTimer();
+    this.timerTask = setInterval(() => {
+      if (this.controller.isConflictPaused()) return;
+      this.controller.markAutoTick();
+      this.syncNow({ trigger: "automatic" }).catch((err) => {
+        this.logs.error("自动同步异常: " + String(err && err.message || err));
+      });
+    }, intervalMs);
+    this.logs.info("自动同步已启动,间隔 " + Math.round(intervalMs / 1e3) + "s");
+  }
+  async _applyStartupBehavior() {
+    const mode = Number(this.settingUtils.take("sync_mode")) || 0;
+    const enabled = this.settingUtils.take("enabled_sync") !== false;
+    if (this.controller.isConflictPaused()) {
+      this.notification.conflictPaused({
+        kind: this.controller.conflictPaused.kind,
+        conflictCount: this.controller.conflictPaused.conflictCount
+      });
+    }
+    if (!enabled) return;
+    if (mode === 0) {
+      this._restartAutoSyncIfConfigured();
+    } else if (mode === 1) {
+      this.syncNow({ trigger: "startup" }).catch((err) => this.logs.error("启动同步失败: " + String(err && err.message || err)));
+    }
+  }
+  // ---------- UI 动作 ----------
+  _registerTopBar() {
+    if (this.isMobile) {
+      this.topBarElement = document.querySelector("#toolbarMore");
+    } else if (typeof q.addTopBar === "function") {
+      q.addTopBar({
+        icon: "iconGmailSync",
+        title: this.i18n.addTopBarIcon || "SY-GSP",
+        position: "right",
+        callback: (event) => this._openMenu(event)
+      });
+      this.topBarElement = document.querySelector('button[data-id="iconGmailSync"]');
+    }
+    if (this.notification) this.notification.setTopBarElement(this.topBarElement);
+  }
+  _openMenu(event) {
+    const actions = {
+      startSync: () => this.syncNow({ trigger: "manual" }),
+      refreshWorkspaceTree: () => this.kernel.refreshFiletree(),
+      recoverAssets: () => this._recoverAssets(),
+      openHistory: () => this.openSyncHistoryPanel(),
+      openLogs: () => openLogsDialog({ q, i18n: this.i18n, logs: this.logs }),
+      openDiagnosis: () => this.diagnosisPanel.show({ mode: "diagnosis" }),
+      openSettings: () => this.openSetting(),
+      resolveConflict: () => {
+        const set = this.conflictService.openSet(this._repoKey(this._repoInfo()));
+        if (set) this.conflictDialog.show(set);
+        else this.diagnosisPanel.show({ mode: this.controller.conflictPaused && this.controller.conflictPaused.kind === "BASE_UNRESOLVED" ? "base_recovery" : "diagnosis" });
+      },
+      getSetting: (key) => this.settingUtils.take(key),
+      setSettingAndSave: (key, value) => this.settingUtils.setAndSave(key, value)
+    };
+    const menu = buildTopBarMenu({
+      q,
+      plugin: this,
+      i18n: this.i18n,
+      actions,
+      conflictPaused: this.controller.isConflictPaused()
+    });
+    const anchor = event && event.target ? event.target : this.topBarElement;
+    if (anchor && anchor.getBoundingClientRect) {
+      const rect = anchor.getBoundingClientRect();
+      menu.open({ x: rect.right, y: rect.bottom });
+    } else {
+      menu.open({ x: window.innerWidth - 220, y: 32 });
+    }
+  }
+  openSetting() {
+    const setting = this.setting;
+    if (setting && typeof setting.open === "function") setting.open();
+  }
+  openSyncHistoryPanel() {
+    const info = this._repoInfo();
+    if (!info.owner || !info.repo || !info.branch || !info.token) {
+      this.notification.toast(this.i18n.warnFinishSettingConfig || "请先完整填写设置", "error");
+      return;
+    }
+    const dialog = new q.Dialog({
+      positionId: "mainSyncHistory",
+      content: '<div id="sygspSyncHistory" class="fn__flex-column" style="height: 100%;"></div>',
+      width: "90vw",
+      height: "80vh",
+      hideCloseIcon: false,
+      destroyCallback: () => {
+        if (this._historyPanel) {
+          this._historyPanel.destroy();
+          this._historyPanel = null;
+        }
+      }
+    });
+    const provider = this._makeProvider(info);
+    const base = this.metadataStore.get(this._repoKey(info));
+    this._historyPanel = new SyncHistoryPanel({
+      container: dialog.element.querySelector("#sygspSyncHistory"),
+      provider: {
+        listCommits: (query) => provider.listCommits(query),
+        compareCommits: (baseRef, headRef) => provider.compareCommits(baseRef, headRef),
+        getFileContent: (path, ref) => provider.getFileContent(path, ref)
+      },
+      listNotebooks: async () => {
+        const res = await this.kernel.lsNotebooks();
+        return res && res.notebooks || [];
+      },
+      branchName: info.branch,
+      localCommitSha: base && base.lastConfirmedCommit ? base.lastConfirmedCommit : "",
+      localCommitTime: base && base.lastSuccessfulAt ? base.lastSuccessfulAt : "",
+      i18n: this.i18n,
+      onRollback: (path, ref) => this._writeCommitFile(path, ref, provider, true),
+      onDownload: (path, ref) => this._writeCommitFile(path, ref, provider, false),
+      notify: (msg, type) => this.notification.toast(msg, type)
+    });
+  }
+  _makeProvider(info) {
+    return info.provider === "gitee" ? new GiteeProvider({ owner: info.owner, repo: info.repo, branch: info.branch, token: info.token }) : new GitHubProvider({ owner: info.owner, repo: info.repo, branch: info.branch, token: info.token });
+  }
+  /** 历史面板: 回滚(覆盖本地)/下载(另存到隔离目录) */
+  async _writeCommitFile(path, ref, provider, overwrite) {
+    try {
+      const content = await provider.getFileContent(path, ref);
+      const bytes = content.bytes;
+      if (!bytes || bytes.length === 0) {
+        this.notification.toast(this.i18n.sygspFileContentEmpty || "文件内容为空,已停止", "error");
+        return;
+      }
+      const targetPath = overwrite ? path : "temp/SY-GSP/downloads/" + String(path).replace(/^\/+/, "");
+      await this.kernel.putFile(targetPath, new Blob([bytes]), false);
+      const tpl = overwrite ? this.i18n.sygspRollbackDone || "已回滚" : this.i18n.sygspDownloadDone || "已下载";
+      this.notification.toast(tpl + ": " + targetPath, "info");
+    } catch (err) {
+      this.notification.toast("❌ " + String(err && err.message || err), "error");
+    }
+  }
+  /** 更新资源路径(菜单) */
+  async _recoverAssets() {
+    try {
+      const adapter = new ContentAdapter(this.kernel, { backupDir: "temp/SY-GSP/backup/" });
+      const result = await adapter.replaceAssetPrefix({ path: "", assetsPrefix: this.settingUtils.take("asset_prefix") || "" });
+      q.showMessage((this.i18n.updateLocalAssetsPathSucc || "资源路径已更新") + " (" + result.updated + ")", 3e3, "info");
+    } catch (err) {
+      q.showMessage((this.i18n.updateLocalAssetsPathFailed || "资源路径更新失败") + ": " + String(err && err.message || err), 6e3, "error");
+    }
+  }
+  // ---------- 诊断 ----------
+  async _runDiagnosis() {
+    const checks = [];
+    const info = this._repoInfo();
+    checks.push({
+      name: "仓库配置",
+      ok: !!(info.owner && info.repo && info.branch),
+      detail: info.owner ? info.provider + ": " + info.owner + "/" + info.repo + " @ " + info.branch : "仓库地址无法解析,请检查设置"
+    });
+    checks.push({ name: "Token", ok: !!info.token, detail: info.token ? "已配置" : "未配置" });
+    try {
+      const probePath = "temp/SY-GSP/probe.txt";
+      await this.kernel.putFile(probePath, new Blob(["ok"]), false);
+      const blob = await this.kernel.getFile(probePath);
+      const ok = !!blob && await blob.text() === "ok";
+      await this.kernel.removeFile(probePath);
+      checks.push({ name: "本地文件读写", ok, detail: ok ? "temp/SY-GSP/ 读写正常" : "内容校验失败" });
+    } catch (err) {
+      checks.push({ name: "本地文件读写", ok: false, detail: String(err && err.message || err) });
+    }
+    if (info.owner && info.branch) {
+      try {
+        const provider = this._makeProvider(info);
+        const head = await provider.getBranchHead();
+        checks.push({ name: "远端可达", ok: true, detail: "HEAD " + head.sha.slice(0, 8) });
+        const repoKey = this._repoKey(info);
+        const base = this.metadataStore.getBaseCommit(repoKey);
+        const hint = this.metadataStore.getLegacyHint(repoKey);
+        checks.push({
+          name: "同步基准",
+          ok: !!base,
+          detail: base ? "已确认基准 " + base.slice(0, 8) : hint ? "旧版基准线索 " + String(hint.sha).slice(0, 8) + "(未验证,需通过首同步向导确认)" : "无确认基准(首次同步将进入向导)"
+        });
+      } catch (err) {
+        checks.push({ name: "远端可达", ok: false, detail: String(err && err.message || err) });
+      }
+    }
+    const migrationReport = await this.loadData("migration-report.json");
+    if (migrationReport) {
+      const errs = migrationReport.errors || [];
+      checks.push({
+        name: "旧版设置迁移",
+        ok: errs.length === 0,
+        detail: "迁移 " + (migrationReport.migratedKeys || []).length + " 项" + (errs.length ? ";错误: " + errs.join("; ") : "")
+      });
+    }
+    return checks;
+  }
+  /** 首次写入预览: 只读统计,不执行任何写入 */
+  async _previewPlan() {
+    const info = this._repoInfo();
+    const rows = [];
+    if (!info.owner || !info.branch) {
+      return [{ name: "同步计划", detail: "配置不完整,无法预览" }];
+    }
+    const workspace = new WorkspaceAdapter(this.kernel, {
+      getUserIgnore: () => this.settingUtils.take("ignore_file") || "",
+      getSyncRange: () => Number(this.settingUtils.take("sync_range")) || 0,
+      getNotebooks: async () => {
+        const res = await this.kernel.lsNotebooks();
+        return res && res.notebooks || [];
+      }
+    });
+    const scan = await workspace.scan({ range: Number(this.settingUtils.take("sync_range")) || 0 });
+    rows.push({
+      name: "本地扫描(同步范围内)",
+      detail: scan.files.length + " 个文件" + (scan.enumErrorOccurred ? "(存在目录枚举异常)" : "")
+    });
+    try {
+      const provider = this._makeProvider(info);
+      const head = await provider.getBranchHead();
+      const commit = await provider.getCommit(head.sha);
+      const tree = await provider.getTree(commit.treeSha);
+      const remotePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
+      rows.push({ name: "远端文件", detail: remotePaths.size + " 个文件,HEAD " + head.sha.slice(0, 8) });
+      const localSet = new Set(scan.files.map((f) => f.path));
+      let onlyLocal = 0;
+      for (const p of localSet) if (!remotePaths.has(p)) onlyLocal += 1;
+      let onlyRemote = 0;
+      for (const p of remotePaths) if (!localSet.has(p)) onlyRemote += 1;
+      rows.push({ name: "路径差异(粗略)", detail: "仅本地 " + onlyLocal + " / 仅远端 " + onlyRemote + "(内容级判定在首次同步时执行)" });
+    } catch (err) {
+      rows.push({ name: "远端读取", detail: "失败: " + String(err && err.message || err) });
+    }
+    rows.push({ name: "首次写入模式", detail: "将进入首同步向导: 明确以本地或远端为准后执行一次覆盖同步" });
+    return rows;
+  }
+  // ---------- 历史 ----------
+  async _recordHistory(ctx, state, error, result) {
+    const info = this._repoInfo();
+    try {
+      await this.historyStore.append(this._repoKey(info), {
+        operationId: ctx.id,
+        trigger: ctx.trigger,
+        startedAt: ctx.startedAt,
+        finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        state,
+        phase: ctx.phase,
+        baseCommit: ctx.baseCommit,
+        expectedRemoteHead: ctx.expectedRemoteHead,
+        result: result ? {
+          uploads: result.uploads,
+          downloads: result.downloads,
+          deletionsRemote: result.deletionsRemote,
+          deletionsLocal: result.deletionsLocal,
+          commitSha: result.commitSha
+        } : null,
+        error: error ? error.toSerializable() : null,
+        conflictCount: (ctx.conflicts || []).length
+      });
+    } catch (err) {
+      this.logs.error("历史记录保存失败: " + String(err && err.message || err));
+    }
+  }
+};
+
+module.exports = module.exports.default || module.exports;
