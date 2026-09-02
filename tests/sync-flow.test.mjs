@@ -615,3 +615,70 @@ test("M1 脱敏: 错误消息中的 Bearer token / token 值被隐藏", async ()
   assert.ok(!/secretvalue/.test(failMsg), "token 值不应出现在日志");
   assert.ok(/Bearer \[已隐藏\]/.test(failMsg), "应显示脱敏占位");
 });
+
+test("M1.1 同步成功含文件统计: toast 带数量摘要 + 日志含路径明细", async () => {
+  const p = makeFakePlugin({
+    baseSync: async function (t, s) {
+      const host = p.__gSyncFlowHost;
+      host.trackFile("create", "data/a.sy");
+      host.trackFile("create", "data/b.sy");
+      host.trackFile("update", "data/c.sy");
+      host.trackFile("delete", "data/old.sy");
+      return { sha: "abc123" };
+    },
+  });
+  const host = p.__gSyncFlowHost;
+  const events = [];
+  host.events.on("sync:success", (e) => events.push(e));
+  const before = host.q._msgs.length;
+  await host.runSync(undefined, false);
+  assert.equal(host.state, SyncState.SUCCESS);
+  // toast: 简洁数量摘要
+  const delta = host.q._msgs.slice(before);
+  assert.ok(
+    delta.some((m) => m.type === "info" && /同步成功\(新增 2, 更新 1, 删除 1\)/.test(m.msg)),
+    "成功 toast 应含数量摘要"
+  );
+  // 日志: 路径明细
+  const logs = host.logEntries.map((e) => e.message).join("|");
+  assert.ok(/本次同步文件/.test(logs), "日志应含「本次同步文件」明细行");
+  assert.ok(/data\/a\.sy/.test(logs) && /data\/c\.sy/.test(logs), "日志应含具体文件路径");
+  // 事件携带统计
+  assert.equal(events.length, 1, "应发出 sync:success 事件");
+  assert.deepEqual(events[0].fileStats, { created: 2, updated: 1, deleted: 1 });
+  // 历史 message 也应含数量摘要
+  assert.ok(host.history[host.history.length - 1].message.includes("新增 2, 更新 1, 删除 1"));
+});
+
+test("M1.1 无文件变更: 明确提示已停止同步", async () => {
+  const p = makeFakePlugin(); // 默认 baseSync 不调用 trackFile
+  const host = p.__gSyncFlowHost;
+  const before = host.q._msgs.length;
+  await host.runSync(undefined, false);
+  assert.equal(host.state, SyncState.SUCCESS);
+  const delta = host.q._msgs.slice(before);
+  assert.ok(
+    delta.some((m) => /未检测到文件变更,已停止同步/.test(m.msg)),
+    "无变更时应提示「未检测到文件变更,已停止同步」"
+  );
+  assert.ok(
+    host.logEntries.some((e) => /未检测到文件变更,已停止同步/.test(e.message)),
+    "运行日志也应记录未变更提示"
+  );
+});
+
+test("M1.1 运行日志面板实时刷新: 打开后新增日志会出现在面板内容中", async () => {
+  const p = makeFakePlugin();
+  const host = p.__gSyncFlowHost;
+  host.addLog("info", "首条日志");
+  host.showRuntimeLogs();
+  const dialog = host.q._dialogs[host.q._dialogs.length - 1];
+  assert.ok(dialog, "应打开日志面板");
+  assert.ok(dialog.opts.content.includes("首条日志"), "初始内容应含已有日志");
+  assert.equal(typeof dialog.opts.destroyCallback, "function", "应注册关闭回调以停止刷新");
+  // 模拟面板关闭 → 刷新循环停止(closed 置位,不泄漏)
+  dialog.destroy();
+  host.addLog("info", "关闭后新增日志");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(true, "关闭后面板不再刷新,不抛异常");
+});

@@ -188,5 +188,10 @@
     "sgspSyncNotifyTitle": "Notify on success",
     "sgspSyncNotifyDesc": "Show a notification after each successful sync (default on; when off, failures and conflicts are still notified)",
     "sgspAutoRetryTitle": "Auto retry",
-    "sgspAutoRetryDesc": "Automatically retry retryable sync failures (default off; will be enabled in a later version)"
+    "sgspAutoRetryDesc": "Automatically retry retryable sync failures (default off; will be enabled in a later version)",
+    "gSyncCreatedLabel": "created",
+    "gSyncUpdatedLabel": "updated",
+    "gSyncDeletedLabel": "deleted",
+    "gSyncFilesDetailLabel": "Files synced",
+    "gSyncNoChangeMsg": "No file changes detected; sync stopped"
 }

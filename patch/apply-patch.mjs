@@ -102,6 +102,11 @@ const I18N_KEYS_ZH = {
   gSyncHistoryError: "❌ 同步历史面板暂时无法打开,请稍后重试",
   gSyncStartMsg: "🔄 开始同步...",
   gSyncSuccessMsg: "✅ 同步成功",
+  gSyncCreatedLabel: "新增",
+  gSyncUpdatedLabel: "更新",
+  gSyncDeletedLabel: "删除",
+  gSyncFilesDetailLabel: "本次同步文件",
+  gSyncNoChangeMsg: "未检测到文件变更,已停止同步",
   gSyncPersistFailed: "⚠️ 状态保存失败,重启后可能丢失暂停状态",
   gSyncHistorySaveFailed: "⚠️ 同步历史保存失败",
   sgspSyncNotifyTitle: "成功时通知",
@@ -133,6 +138,11 @@ const I18N_KEYS_EN = {
   gSyncHistoryError: "❌ The sync history panel is unavailable. Please try again later.",
   gSyncStartMsg: "🔄 Syncing...",
   gSyncSuccessMsg: "✅ Sync succeeded",
+  gSyncCreatedLabel: "created",
+  gSyncUpdatedLabel: "updated",
+  gSyncDeletedLabel: "deleted",
+  gSyncFilesDetailLabel: "Files synced",
+  gSyncNoChangeMsg: "No file changes detected; sync stopped",
   gSyncPersistFailed: "⚠️ State save failed, paused state may be lost after restart",
   gSyncHistorySaveFailed: "⚠️ Sync history save failed",
   sgspSyncNotifyTitle: "Notify on success",
@@ -304,6 +314,15 @@ function patchIndex(js) {
   );
   assertAnchor(blobPatchedBody, "catch(err){const __wrapped=new Fe(ne.GIT_BLOB", "Git Blob 底层错误保留");
   js = js.slice(0, bi) + blobPatchedBody + js.slice(be);
+
+  /* ---------- 7.1 文件操作统计: addFileToWorkArea 入口注入 trackFile ---------- */
+  // 两个 addFileToWorkArea 方法都会记录 {operate, path},供运行时在成功日志中汇总本次同步的文件
+  const trackAnchor = "async addFileToWorkArea(t,s,i){";
+  const trackCount = js.split(trackAnchor).length - 1;
+  if (trackCount !== 2) fail("addFileToWorkArea 注入锚点数量异常: " + trackCount);
+  const trackInject =
+    'try{__gSyncFlow&&__gSyncFlow.trackFile(i,s&&s.path?s.path:"")}catch(e){}';
+  js = js.split(trackAnchor).join(trackAnchor + trackInject);
 
   /* ---------- 8. gitUtil 错误向状态机传播 ---------- */
   const anchorsGitUtil = [

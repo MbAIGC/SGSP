@@ -337,6 +337,8 @@ export function createSyncFlowHost(plugin, q) {
     operationSeq: 0,
     currentOperationId: "",
     events: createEventBus(),
+    // M1.1: 本次同步的文件操作统计(patch 在 addFileToWorkArea 注入 trackFile 填充)
+    syncStats: { create: [], update: [], delete: [] },
   };
 
   function i18n(key, fallback) {
@@ -384,6 +386,57 @@ export function createSyncFlowHost(plugin, q) {
     }
   }
 
+  /**
+   * 记录本次同步的一个文件操作(patch 在 addFileToWorkArea 注入调用)。
+   * op: "create" | "update" | "delete"; path: 文件路径。
+   * 每类最多保留 100 条,防止超大同步刷爆内存。
+   */
+  function trackFile(op, path) {
+    try {
+      if (!host.syncStats) {
+        host.syncStats = { create: [], update: [], delete: [] };
+      }
+      const key = op === "create" ? "create" : op === "delete" ? "delete" : "update";
+      const list = host.syncStats[key];
+      if (list && path && list.length < 100) {
+        list.push(String(path));
+      }
+    } catch (e) {
+      /* 统计失败不影响同步主流程 */
+    }
+  }
+
+  /**
+   * 生成「本次同步文件」明细行(patch 注入的 trackFile 数据)。
+   * 每类最多列出前 5 个路径,超出以「等 N 个」省略。
+   */
+  function buildFileStatsText() {
+    const stats = host.syncStats || { create: [], update: [], delete: [] };
+    const parts = [];
+    const cats = [
+      ["create", i18n("gSyncCreatedLabel", "新增")],
+      ["update", i18n("gSyncUpdatedLabel", "更新")],
+      ["delete", i18n("gSyncDeletedLabel", "删除")],
+    ];
+    for (let idx = 0; idx < cats.length; idx++) {
+      const list = stats[cats[idx][0]] || [];
+      if (list.length > 0) {
+        parts.push(
+          cats[idx][1] +
+            " " +
+            list.length +
+            " 个 (" +
+            list.slice(0, 5).join(", ") +
+            (list.length > 5 ? " 等" : "") +
+            ")"
+        );
+      }
+    }
+    return parts.length > 0
+      ? i18n("gSyncFilesDetailLabel", "本次同步文件") + ": " + parts.join("; ")
+      : "";
+  }
+
   /** 记录一条同步历史并持久化(环形保留,失败可观测) */
   function addHistoryEntry(entry) {
     const item = {
@@ -419,25 +472,56 @@ export function createSyncFlowHost(plugin, q) {
     }
   }
 
+  /** 打开运行日志面板(每 1 秒自动刷新,同步进行中的新条目会实时出现) */
   function showRuntimeLogs() {
-    const rows = host.logEntries.length
-      ? host.logEntries
-          .map(function (entry) {
-            return "<div><strong>[" + escapeHtml(entry.level.toUpperCase()) + "] " + escapeHtml(entry.time) + "</strong> " + escapeHtml(entry.message) + "</div>";
-          })
-          .join("")
-      : "<div>暂无运行日志</div>";
+    let dialog = null;
+    let closed = false;
+    // 构建条目 HTML(空日志给出占位提示)
+    const buildRows = function () {
+      return host.logEntries.length
+        ? host.logEntries
+            .map(function (entry) {
+              return "<div><strong>[" + escapeHtml(entry.level.toUpperCase()) + "] " + escapeHtml(entry.time) + "</strong> " + escapeHtml(entry.message) + "</div>";
+            })
+            .join("")
+        : "<div>暂无运行日志</div>";
+    };
+    // 渲染一帧: 重建条目 HTML
+    const render = function () {
+      try {
+        if (!closed && dialog && dialog.element && dialog.element.querySelector) {
+          const box = dialog.element.querySelector("#gSyncRuntimeLogBox");
+          if (box) box.innerHTML = buildRows();
+        }
+      } catch (e) {
+        /* 面板已关闭或宿主 DOM 不支持时忽略 */
+      }
+    };
     try {
-      new q.Dialog({
+      dialog = new q.Dialog({
         title: i18n("gSyncRuntimeLogsTitle", "SGSP 运行日志"),
-        content: '<div class="fn__flex-column" style="height:100%;overflow:auto;padding:8px;font-family:monospace;white-space:pre-wrap;">' + rows + "</div>",
+        content:
+          '<div class="fn__flex-column" id="gSyncRuntimeLogBox" style="height:100%;overflow:auto;padding:8px;font-family:monospace;white-space:pre-wrap;">' +
+          buildRows() +
+          "</div>",
         width: "80vw",
         height: "70vh",
+        destroyCallback: function () {
+          closed = true;
+        },
       });
     } catch (err) {
       addLog("error", "打开运行日志失败: " + (err && err.message ? err.message : err));
       try { q.showMessage("❌ 无法打开 SGSP 运行日志", 3000, "error"); } catch (e) {}
+      return;
     }
+    // 实时刷新循环(面板关闭后停止,避免泄漏)
+    const tick = function () {
+      if (closed) return;
+      render();
+      setTimeout(tick, 1000);
+    };
+    setTimeout(tick, 1000);
   }
 
   function setBadge() {
@@ -831,6 +915,8 @@ export function createSyncFlowHost(plugin, q) {
    */
   async function runSync(t, s) {
     const prevState = host.state;
+    // 每轮同步开始重置文件操作统计(patch 注入的 trackFile 会重新填充)
+    host.syncStats = { create: [], update: [], delete: [] };
     // 用户的「明确解决动作」: 强制 远端覆盖本地 / 本地覆盖远端
     const isResolution =
       t === STRATEGY.REMOTE_OVER_LOCAL || t === STRATEGY.LOCAL_OVER_REMOTE;
@@ -905,14 +991,52 @@ export function createSyncFlowHost(plugin, q) {
 
       host.state = SyncState.SUCCESS;
       setBadge();
-      const successMsg = i18n("gSyncSuccessMsg", "✅ 同步成功");
-      addLog("info", successMsg);
+      const stats = host.syncStats || { create: [], update: [], delete: [] };
+      const created = stats.create.length;
+      const updated = stats.update.length;
+      const deleted = stats.delete.length;
+      const total = created + updated + deleted;
+      let successMsg = i18n("gSyncSuccessMsg", "✅ 同步成功");
+      if (total > 0) {
+        // 有文件变更: 成功消息带数量摘要,明细单独写入运行日志
+        successMsg =
+          successMsg +
+          "(" +
+          i18n("gSyncCreatedLabel", "新增") +
+          " " +
+          created +
+          ", " +
+          i18n("gSyncUpdatedLabel", "更新") +
+          " " +
+          updated +
+          ", " +
+          i18n("gSyncDeletedLabel", "删除") +
+          " " +
+          deleted +
+          ")";
+        addLog("info", successMsg);
+        const statsDetail = buildFileStatsText();
+        if (statsDetail) {
+          addLog("info", statsDetail);
+        }
+      } else {
+        // 无文件变更: 明确提示已停止同步,避免用户误以为没有执行
+        successMsg =
+          successMsg +
+          "(" +
+          i18n("gSyncNoChangeMsg", "未检测到文件变更,已停止同步") +
+          ")";
+        addLog("info", successMsg);
+      }
       addHistoryEntry({
         state: SyncState.SUCCESS,
         category: "",
         message: successMsg,
       });
-      emitSync("sync:success", { operationId: host.currentOperationId });
+      emitSync("sync:success", {
+        operationId: host.currentOperationId,
+        fileStats: { created: created, updated: updated, deleted: deleted },
+      });
       if (isSyncNotifyEnabled()) {
         notify(successMsg, "info");
       }
@@ -985,6 +1109,8 @@ export function createSyncFlowHost(plugin, q) {
   host.i18n = i18n;
   host.notify = notify;
   host.addLog = addLog;
+  host.trackFile = trackFile;
+  host.buildFileStatsText = buildFileStatsText;
   host.showRuntimeLogs = showRuntimeLogs;
   host.setBadge = setBadge;
   host.persist = persist;

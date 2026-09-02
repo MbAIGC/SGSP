@@ -188,5 +188,10 @@
     "sgspSyncNotifyTitle": "成功时通知",
     "sgspSyncNotifyDesc": "每次同步成功时显示通知(默认开启,关闭后仅失败与冲突仍会通知)",
     "sgspAutoRetryTitle": "自动重试",
-    "sgspAutoRetryDesc": "同步失败且可重试时自动重试(默认关闭,将在后续版本启用)"
+    "sgspAutoRetryDesc": "同步失败且可重试时自动重试(默认关闭,将在后续版本启用)",
+    "gSyncCreatedLabel": "新增",
+    "gSyncUpdatedLabel": "更新",
+    "gSyncDeletedLabel": "删除",
+    "gSyncFilesDetailLabel": "本次同步文件",
+    "gSyncNoChangeMsg": "未检测到文件变更,已停止同步"
 }
