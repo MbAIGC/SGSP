@@ -1,48 +1,91 @@
-name: 构建与验证
+name: Build & Test
 
+# 触发:
+#   - 推送到 main 分支: 跑测试 + 重新生成插件包 + 创建 GitHub Release
+#   - 手动触发(workflow_dispatch): 可自定义版本号
+# 版本号: 默认从 0.3.01 开始,每次成功编译自动递增两位补丁号
 on:
   push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "插件版本号(留空: main 自动递增;默认从 0.3.01 开始)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sgsp-main-release
+  cancel-in-progress: false
 
 jobs:
-  verify:
+  build:
+    name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装 Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
+          node-version: 20
 
-      - name: 安装依赖
-        run: npm install --include=dev
-
-      - name: 单元测试
-        run: npm test
-
-      - name: 构建
-        run: npm run build
-
-      - name: 冒烟验证
-        run: npm run smoke
-
-      - name: 打包插件
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Determine plugin version
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p package/SY-GSP
-          cp index.js index.css plugin.json icon.png README.md README_en_US.md package/SY-GSP/
-          cp -r i18n package/SY-GSP/
-          cd package && zip -r "../SY-GSP-${GITHUB_REF_NAME}.zip" SY-GSP
+          V="${{ github.event.inputs.version }}"
+          if [ -z "$V" ]; then
+            LATEST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '[.[] | select(.tagName | test("^v0\\.3\\.[0-9]{2}$")) | .tagName] | sort | last' || true)
+            if [ -z "$LATEST" ]; then
+              V="0.3.01"
+            else
+              PATCH="${LATEST#v0.3.}"
+              PATCH=$((10#$PATCH + 1))
+              V=$(printf '0.3.%02d' "$PATCH")
+            fi
+          fi
+          echo "version=$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
-      - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Unit tests
+        run: node --test tests/*.test.mjs
+
+      - name: Build plugin package files (patch injection)
+        # 从 vendor/index.js(官方原版)+ src/sync-flow-runtime.js 重新生成
+        # 根目录 index.js,并就地补齐 i18n / index.css / plugin.json
+        run: GIT_SYNC_VERSION=${{ steps.ver.outputs.version }} node patch/apply-patch.mjs
+
+      - name: Syntax check
+        run: node --check index.js
+
+      - name: End-to-end smoke verification
+        run: node smoke/verify.mjs
+
+      - name: Package plugin zip
+        run: |
+          mkdir -p dist
+          zip -r -q dist/SGSP-${{ steps.ver.outputs.version }}.zip \
+            index.js index.css plugin.json i18n icon.png preview.png \
+            README.md README_en_US.md
+          ls -la dist/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SGSP-${{ steps.ver.outputs.version }}
+          path: dist/*.zip
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: SY-GSP-*.zip
+          tag_name: v${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: SGSP v${{ steps.ver.outputs.version }}
+          files: dist/*.zip
           generate_release_notes: true

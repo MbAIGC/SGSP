@@ -1,239 +1,156 @@
-#!/usr/bin/env node
 /**
- * 冒烟验证: 以存根 siyuan 模块装载构建产物 index.js,
- * 模拟思源插件生命周期,验证入口可加载、事件挂接与引擎装配链路完整。
- * 不访问任何真实网络。
+ * 端到端冒烟验证: 用 siyuan stub 加载根目录插件包(即构建产物 index.js),
+ * 模拟一次完整冲突闭环:
+ *   自动同步 → 冲突 → 暂停定时器 → 弹窗/徽标/通知 → 暂停会话内再触发(拦截)
+ *   → 用户选择「保留远端版本」→ 强制远端覆盖 → resolved → 恢复通知
+ *
+ * 运行: node smoke/verify.mjs
+ * 依赖: 已执行 node patch/apply-patch.mjs 生成根目录 index.js
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import Module from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
+const ROOT = path.resolve(__dirname, "..");
 
-const results = [];
-function check(name, fn) {
-  try {
-    fn();
-    results.push(["✅", name, ""]);
-  } catch (err) {
-    results.push(["❌", name, (err && err.message) || String(err)]);
-  }
+const BUNDLE = path.join(ROOT, "index.js");
+const PLUGIN_JSON = path.join(ROOT, "plugin.json");
+const I18N_ZH = path.join(ROOT, "i18n", "zh_CN.json");
+
+if (!fs.existsSync(BUNDLE)) {
+  console.error("未找到根目录 index.js,请先运行: node patch/apply-patch.mjs");
+  process.exit(1);
 }
 
-// ---------- siyuan 存根 ----------
-const stubCalls = { addTopBar: 0, showMessage: 0, dialog: 0, settingOpen: 0 };
-class StubPlugin {
-  constructor() {
-    this.data = {};
-    this.i18n = {};
-  }
-  addIcons() {}
-  addTopBar(opts) {
-    stubCalls.addTopBar += 1;
-    if (opts && typeof opts.callback === "function") this._topBarCb = opts.callback;
-  }
-  async loadData(name) {
-    return this.data[name] === undefined ? null : JSON.parse(JSON.stringify(this.data[name]));
-  }
-  async saveData(name, payload) {
-    this.data[name] = JSON.parse(JSON.stringify(payload));
-    return true;
-  }
-}
-class StubSetting {
-  constructor(opts) {
-    this.opts = opts;
-    this.items = [];
-  }
-  addItem(item) {
-    this.items.push(item);
-  }
-  open() {
-    stubCalls.settingOpen += 1;
-  }
-}
-class StubDialog {
-  constructor(opts) {
-    stubCalls.dialog += 1;
-    this.opts = opts;
-    this.element = {
-      querySelector: () => ({ textContent: "", appendChild: () => {} }),
-    };
-  }
-  destroy() {}
-}
-class StubMenu {
-  constructor() {
-    this.items = [];
-  }
-  addItem(item) {
-    this.items.push(item);
-    return this;
-  }
-  addSeparator() {
-    return this;
-  }
-  open() {}
-}
-const siyuanStub = {
-  Plugin: StubPlugin,
-  Setting: StubSetting,
-  Dialog: StubDialog,
-  Menu: StubMenu,
-  showMessage: () => {
-    stubCalls.showMessage += 1;
-  },
-  confirm: () => {},
-  getFrontend: () => "desktop",
-  addTopBar: StubPlugin.prototype.addTopBar,
-  fetchSyncPost: async (api) => {
-    // 内核目录枚举存根: 一个本地文档,驱动引擎走完整规划/推送链路
-    if (api === "/api/file/readDir") {
-      return { code: 0, data: { dir: [], file: [{ name: "a.md", isDir: false, updated: Math.floor(Date.now() / 1000) }] } };
-    }
-    return { code: 0, data: {} };
-  },
-  openTab: () => {},
-};
-
-// ---------- 模块装载钩子 ----------
-const Module = require("node:module");
+// 让 bundle 内的 require("siyuan") 指向 stub
+const STUB = path.join(ROOT, "smoke", "stub", "siyuan.js");
 const origResolve = Module._resolveFilename;
-Module._resolveFilename = function (request, ...rest) {
-  if (request === "siyuan") return "siyuan-stub";
-  return origResolve.call(this, request, ...rest);
+Module._resolveFilename = function (request, ...args) {
+  if (request === "siyuan") return STUB;
+  return origResolve.call(this, request, ...args);
 };
-require.cache["siyuan-stub"] = { id: "siyuan-stub", filename: "siyuan-stub", loaded: true, exports: siyuanStub };
 
-// ---------- 最小 DOM / fetch 存根(设置面板与顶栏需要) ----------
-function fakeEl() {
+const siyuan = (await import(pathToFileURL(STUB).href)).default;
+const msgs = [];
+const dialogs = [];
+siyuan.showMessage = (m, t, type) => msgs.push({ m, t, type });
+siyuan.Dialog = class {
+  constructor(opts) {
+    this.opts = opts;
+    this.element = { querySelector() { return { addEventListener() {} }; } };
+    dialogs.push(opts);
+  }
+  destroy() { this.destroyed = true; }
+};
+
+const bundle = await import(pathToFileURL(BUNDLE).href);
+const Cls = bundle.default || bundle;
+
+const p = new Cls();
+p.i18n = JSON.parse(fs.readFileSync(I18N_ZH, "utf8"));
+const pluginMeta = JSON.parse(fs.readFileSync(PLUGIN_JSON, "utf8"));
+
+let timerRemoved = false;
+p.timerTask = { removeSelf() { timerRemoved = true; } };
+
+function mkClassList() {
+  const s = new Set();
   return {
-    style: {},
-    dataset: {},
-    className: "",
-    classList: { add() {}, remove() {}, contains: () => false },
-    appendChild(c) {
-      return c;
-    },
-    addEventListener() {},
-    removeEventListener() {},
-    setAttribute() {},
-    getBoundingClientRect: () => ({ right: 0, bottom: 0 }),
-    querySelector: () => fakeEl(),
-    querySelectorAll: () => [],
-    textContent: "",
-    placeholder: "",
-    disabled: false,
-    checked: false,
-    value: "",
-    type: "",
-    focus() {},
+    classes: s,
+    add(c) { s.add(c); },
+    remove(c) { s.delete(c); },
+    toggle(c) { s.has(c) ? s.delete(c) : s.add(c); return s.has(c); },
   };
 }
-globalThis.document = {
-  createElement: () => fakeEl(),
-  querySelector: () => fakeEl(),
-  querySelectorAll: () => [],
-  body: fakeEl(),
-};
-globalThis.window = { innerWidth: 1200, addEventListener() {} };
-globalThis.fetch = async () => ({
-  ok: false,
-  status: 404,
-  statusText: "Not Found",
-  headers: { get: () => "" },
-  json: async () => ({ message: "Not Found" }),
-  text: async () => "Not Found",
-  arrayBuffer: async () => new ArrayBuffer(0),
-});
-
-// ---------- 装载构建产物 ----------
-const distPath = path.join(__dirname, "..", "index.js");
-check("构建产物存在", () => {
-  if (!fs.existsSync(distPath)) throw new Error("index.js 不存在,请先执行 npm run build");
-  const code = fs.readFileSync(distPath, "utf8");
-  if (!code.includes("module.exports = module.exports.default")) throw new Error("缺少 CJS default 导出修复");
-});
-
-const SyGspPlugin = require(distPath);
-check("入口导出插件类", () => {
-  if (typeof SyGspPlugin !== "function") throw new Error("index.js 未导出插件类");
-  if (!(SyGspPlugin.prototype instanceof StubPlugin)) throw new Error("插件类未继承 siyuan.Plugin");
-});
-
-// ---------- 生命周期冒烟 ----------
-const plugin = new SyGspPlugin();
-plugin.i18n = require(path.join(__dirname, "..", "i18n/zh_CN.json"));
-plugin.data = {
-  "settings.json": {
-    repository_address: "https://github.com/o/r.git",
-    repository_branch: "main",
-    submit_token: "tk",
+const svgFake = { classList: mkClassList(), setAttribute() {} };
+p.topBarElement = { classList: mkClassList(), title: "", querySelector() { return svgFake; } };
+p.settingUtils = {
+  get(k) {
+    const m = { enabled_sync: true, sync_strategy: 0, sync_mode: "0", sync_interval: 600000 };
+    return m[k];
   },
-  "engine-state.json": { firstWriteConfirmed: true },
-}; // saveData/loadData 存根存储(onload 前预置配置)
+};
+p.gitUtil = {
+  async handleAutoRemoteAndLocalFileSync() {
+    const conflictErr = { name: "Mr", code: 300, path: "data/20210808180117-czj9bvb/note.sy", message: "⚠文档冲突:" };
+    throw { name: "Jt", code: -100, message: "runLocalSyncTask", cause: conflictErr };
+  },
+};
+p.startAutoSync = function () {};
 
-(async () => {
-  await plugin.onload();
-  check("onload: 内核/存储/控制器装配", () => {
-    if (!plugin.kernel) throw new Error("kernel 未装配");
-    if (!plugin.metadataStore) throw new Error("metadataStore 未装配");
-    if (!plugin.controller) throw new Error("controller 未装配");
-    if (!plugin.settingUtils || plugin.settingUtils.settings.size < 15) throw new Error("设置项装配不完整");
-  });
+let failures = 0;
+function check(label, cond) {
+  console.log((cond ? "✔ " : "✘ ") + label);
+  if (!cond) failures++;
+}
 
-  await plugin.onLayoutReady();
-  check("onLayoutReady: 顶栏注册", () => {
-    if (stubCalls.addTopBar < 1) throw new Error("addTopBar 未调用");
-  });
+await p.syncDataToCloud();
+const host = p.__gSyncFlowHost;
 
-  // 路径一: 配置缺失(临时清空) → 提示并打开设置,不触发引擎
-  const savedAddr = plugin.settingUtils.take("repository_address");
-  const savedBranch = plugin.settingUtils.take("repository_branch");
-  const savedToken = plugin.settingUtils.take("submit_token");
-  plugin.settingUtils.set("repository_address", "");
-  plugin.settingUtils.set("submit_token", "");
-  await plugin.syncNow({ trigger: "manual" });
-  check("syncNow: 配置缺失安全返回", () => {
-    if (stubCalls.showMessage < 1) throw new Error("未提示配置缺失");
-    if (stubCalls.settingOpen < 1) throw new Error("未打开设置面板");
-  });
-  plugin.settingUtils.set("repository_address", savedAddr);
-  plugin.settingUtils.set("repository_branch", savedBranch);
-  plugin.settingUtils.set("submit_token", savedToken);
+check("插件标识 = SGSP", pluginMeta.name === "SGSP" && p.name === "SGSP");
+check("状态 = conflict_paused", host.state === "conflict_paused");
+check("自动同步定时器已暂停", timerRemoved === true);
+check("冲突详情已提取", host.conflictDetail && host.conflictDetail.path === "data/20210808180117-czj9bvb/note.sy");
+check("弹出冲突对话框(含标题)", dialogs.length >= 1 && /冲突/.test(dialogs[0].title));
+check("顶栏红色徽标", p.topBarElement.classList.classes.has("git-sync-conflict-paused"));
+check("已发出错误级通知", msgs.some((m) => m.type === "error"));
 
-  // 路径二: 配置齐全 + 远端不可达(404) → 引擎报错且错误已分类,不伪造成功
-  let engineError = null;
-  try {
-    await plugin.syncNow({ trigger: "manual" });
-  } catch (err) {
-    engineError = err;
-  }
-  check("syncNow: 引擎链路执行且错误可分类", () => {
-    if (!engineError) throw new Error("假远端应报错,却返回成功(伪造成功路径)");
-    if (!engineError.category) throw new Error("错误缺少分类");
-  });
+// 暂停会话内,自动定时器再触发: 应被拦截,只提示一次
+host.markAutoTick();
+const before = msgs.length;
+await p.syncDataToCloud();
+check("暂停后自动触发被拦截(状态不变)", host.state === "conflict_paused");
+check("暂停后提示只出现一次", msgs.length - before === 1);
 
-  await plugin.onunload();
-  check("onunload: 清理定时器与控制器", () => {
-    if (plugin.timerTask !== null) throw new Error("自动同步定时器未清理");
-  });
+// 用户选择「保留远端版本」
+let remoteCoverCalled = false;
+p.gitUtil.handleRemoteCoverLocal = async function (force) { remoteCoverCalled = force === true; return {}; };
+p.gitUtil.handleLocalCoverRemote = async function () { return {}; };
+await host.resolveKeepRemote();
+check("强制远端覆盖被调用(force=true)", remoteCoverCalled === true);
+check("解决后状态 = resolved", host.state === "resolved");
+check("红色徽标已移除", !p.topBarElement.classList.classes.has("git-sync-conflict-paused"));
+check("发出恢复通知", msgs.some((m) => String(m.m).includes("冲突已处理")));
 
-  // 汇总
-  let failed = 0;
-  for (const [icon, name, msg] of results) {
-    if (icon === "❌") failed += 1;
-    console.log(icon + " " + name + (msg ? " — " + msg : ""));
-  }
-  if (failed > 0) {
-    console.log("\n冒烟验证失败: " + failed + " 项");
-    process.exit(1);
-  }
-  console.log("\n冒烟验证全部通过(" + results.length + " 项)");
-})().catch((err) => {
-  console.error("冒烟验证异常终止:", err);
-  process.exit(1);
-});
+// M1: 非冲突失败路径 → FAILED + 错误通知(带分类) + 历史 + 事件
+const errorEvents = [];
+host.events.on("sync:error", (e) => errorEvents.push(e));
+p.gitUtil.handleAutoRemoteAndLocalFileSync = async function () {
+  throw new Error("网络错误");
+};
+try {
+  await p.syncDataToCloud();
+  check("非冲突失败应重新抛出", false);
+} catch (e) {
+  check("非冲突失败重新抛出原错误", /网络错误/.test(e && e.message));
+}
+check("非冲突失败状态 = failed", host.state === "failed");
+check("失败通知已发出(含分类摘要)", msgs.some((m) => m.type === "error" && /同步失败: 网络错误/.test(String(m.m))));
+check("sync:error 事件已发出(分类 NETWORK)", errorEvents.length >= 1 && errorEvents[0].category === "NETWORK");
+const failEntry = host.history[host.history.length - 1];
+check("失败历史已记录(category=NETWORK)", failEntry && failEntry.state === "failed" && failEntry.category === "NETWORK");
+
+// M1: 成功路径 → SUCCESS + 成功通知(默认开) + 历史
+p.gitUtil.handleAutoRemoteAndLocalFileSync = async function () {
+  return {};
+};
+await p.syncDataToCloud();
+check("成功后状态 = success", host.state === "success");
+check("成功通知已发出", msgs.some((m) => String(m.m).includes("同步成功")));
+const okEntry = host.history[host.history.length - 1];
+check("成功历史已记录", okEntry && okEntry.state === "success");
+
+// 构建产物必须保留原同步入口的异常传播，否则状态机无法接管冲突。
+const builtSource = fs.readFileSync(BUNDLE, "utf8");
+check(
+  "构建产物传播三个同步入口异常",
+  (builtSource.match(/He\(\[we\(\{rethrow:!0\}\)\],xe\.prototype,"handle(RemoteCoverLocal|LocalCoverRemote|AutoRemoteAndLocalFileSync)"\)/g) || []).length === 3
+);
+
+Module._resolveFilename = origResolve;
+
+console.log(failures === 0 ? "\n端到端冒烟验证全部通过 ✔" : `\n存在 ${failures} 项失败 ✘`);
+process.exit(failures === 0 ? 0 : 1);

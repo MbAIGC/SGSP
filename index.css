@@ -1,9 +1,6 @@
 @charset "UTF-8";.tooltipGitGraph.svelte-1naq546{width:auto;height:auto;position:absolute;background-color:#312f35;border-radius:5px;display:none;color:#fff;padding:2px;font-size:.8em}
 
 
-/* ===== SY-GSP 冲突暂停状态徽标(同步引擎 2.0) ===== */
+/* ===== GIT-SYNC 冲突暂停状态徽标(patch/apply-patch.mjs 注入) ===== */
 .toolbar__item.git-sync-conflict-paused svg{color:#e53935!important;animation:gitSyncConflictBlink 1.1s ease-in-out infinite}
 @keyframes gitSyncConflictBlink{0%,100%{opacity:1}50%{opacity:.25}}
-
-/* 同步历史面板(与思源 history__* 风格对齐的最小补充) */
-#sygspSyncHistory{display:flex;flex-direction:column;gap:4px}
